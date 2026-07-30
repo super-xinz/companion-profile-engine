@@ -1,0 +1,857 @@
+rule_system_version: "2.0.0-draft"
+document_type: "dialogue_profile_maintenance_system"
+target_schema: "01_profile_schema.yaml@2.0.0"
+status: "expert_review_required"
+
+objective: >-
+  将任意自然对话转换为可审计的事实、事件、状态、偏好、语言观察或人格证据，
+  再对真人画像做小步、可撤销、可解释的维护。系统不依赖枚举所有可能句子，
+  而依赖统一语义框架、字段路由、更新算子、冲突处理和派生字段重建。
+
+core_principles:
+  - "先理解这句话在说什么，再判断能否更新画像；关键词只用于辅助召回。"
+  - "先路由到事实/记忆/状态/偏好/人格/语言观察，再执行对应算子。"
+  - "明确更正高于明确自述，明确自述高于跨会话重复行为，重复行为高于单次推断，全部高于冷启动先验。"
+  - "用户说‘现在’通常是状态；用户说‘我一直/通常’才可能是长期人格。"
+  - "一个事件可以提供人格证据，但事件本身必须先独立写入memory。"
+  - "MBTI、场景行为、语言摘要和人物画像优先由底层字段重建，不被单句话直接覆盖。"
+  - "相反证据同时保留；冲突首先降低置信度，而不是删除旧证据。"
+  - "用户有权查看、纠正、关闭和删除画像。"
+
+turn_processing_pipeline:
+  - id: "DU-P01"
+    operation: "NORMALIZE_MESSAGE"
+    produces: "normalized_text"
+    responsibilities:
+      - "保留原文哈希和必要脱敏片段"
+      - "识别语言、时间、会话和消息ID"
+  - id: "DU-P02"
+    operation: "PARSE_SEMANTIC_FRAMES"
+    produces: "semantic_frames[]"
+    responsibilities:
+      - "抽取主体、行为、对象、场景、时间、频率、情态、否定、转折、因果和置信度"
+  - id: "DU-P03"
+    operation: "CLASSIFY_EVIDENCE_DOMAIN"
+    produces: "routed_candidates[]"
+    responsibilities:
+      - "区分事实、状态、事件、互动偏好、长期人格、语言观察、明确纠正"
+  - id: "DU-P04"
+    operation: "RESOLVE_REFERENCE_AND_CONTEXT"
+    produces: "contextualized_candidates[]"
+    responsibilities:
+      - "解析‘他/那个事/还是这样’等指代"
+      - "避免把谈论别人误写成用户画像"
+  - id: "DU-P05"
+    operation: "MAP_TO_PROFILE_TARGETS"
+    produces: "proposed_operations[]"
+    responsibilities:
+      - "映射到事实、17维、18场景、语言风格、状态、记忆或运行时偏好"
+  - id: "DU-P06"
+    operation: "APPLY_NEGATION_SCOPE_AND_SAFETY"
+    produces: "validated_operations[]"
+    responsibilities:
+      - "处理否定、假设、引用、讽刺和不确定性"
+      - "阻止无依据敏感推断"
+  - id: "DU-P07"
+    operation: "DEDUPLICATE_AND_SCORE_EVIDENCE"
+    produces: "evidence_records[]"
+    responsibilities:
+      - "同事件同会话重复不累计"
+      - "计算可靠度、明确度、频率、时效性和独立性"
+  - id: "DU-P08"
+    operation: "MERGE_WITH_CURRENT_PROFILE"
+    produces: "profile_patch"
+    responsibilities:
+      - "小步更新、冲突降置信度、版本乐观锁"
+  - id: "DU-P09"
+    operation: "REBUILD_DERIVED_FIELDS"
+    produces: "derived_patch"
+    responsibilities:
+      - "重建MBTI、受影响场景、语言摘要和人物画像"
+  - id: "DU-P10"
+    operation: "GENERATE_REPLY_HINTS"
+    produces: "reply_hints"
+    responsibilities:
+      - "把画像变化转成下一轮机器人的长度、语气、结构、共情和追问策略"
+  - id: "DU-P11"
+    operation: "COMMIT_VERSION_AND_AUDIT"
+    produces: "new_profile_version"
+
+semantic_frame_schema:
+  required_fields:
+    frame_id: "string"
+    subject:
+      values: ["user", "other_person", "robot", "group", "unknown"]
+    predicate: "normalized_action_or_state"
+    object: "entity|string|null"
+    semantic_domain:
+      values:
+        - "identity_fact"
+        - "preference"
+        - "habit"
+        - "decision"
+        - "task_behavior"
+        - "social_behavior"
+        - "relationship_behavior"
+        - "emotion"
+        - "self_evaluation"
+        - "event"
+        - "communication_behavior"
+        - "correction"
+        - "hypothetical"
+        - "quotation"
+    polarity: "positive|negative|neutral"
+    negated: "boolean"
+    modality:
+      values: ["asserted", "uncertain", "desired", "obligated", "hypothetical", "quoted"]
+    temporal_scope:
+      values: ["now", "recent", "habitual", "historical", "future", "unknown"]
+    frequency:
+      values: ["once", "sometimes", "often", "usually", "always", "never", "unknown"]
+    context:
+      values:
+        - "work"
+        - "family"
+        - "friendship"
+        - "romantic"
+        - "stranger"
+        - "conflict"
+        - "stress"
+        - "leisure"
+        - "general"
+        - "unknown"
+    explicitness: "0..1"
+    extractor_confidence: "0..1"
+    supporting_span: "redacted_text_span"
+  optional_fields:
+    contrast_target: "frame_id|null"
+    cause: "string|null"
+    consequence: "string|null"
+    intensity: "0..1|null"
+    user_requested_persistence: "boolean|null"
+
+routing_rules:
+  explicit_correction:
+    match_when:
+      - "semantic_domain == correction"
+      - "用户明确说系统理解错、不是A而是B、要求改掉或忘掉"
+    operation: "CORRECT_OR_INVALIDATE"
+    priority: 100
+  identity_fact:
+    match_when:
+      - "subject == user"
+      - "语义为称呼、生日、家庭关系等可陈述事实"
+    operation: "SET_OR_CORRECT_FACT"
+    priority: 90
+  interaction_preference:
+    match_when:
+      - "对象是机器人回复方式"
+      - "包含以后、请、别、希望你、回答时等指令或偏好"
+    operation: "SET_RUNTIME_PREFERENCE"
+    priority: 90
+  current_state:
+    match_when:
+      - "temporal_scope in [now,recent]"
+      - "语义为情绪、压力、精力或即时身体感受"
+    operation: "SET_STATE_WITH_TTL"
+    priority: 85
+  event_or_memory:
+    match_when:
+      - "语义包含人物、时间、计划、经历、承诺或发生的事件"
+    operation: "UPSERT_MEMORY"
+    priority: 80
+  stable_trait_evidence:
+    match_when:
+      - "subject == user"
+      - "modality == asserted"
+      - "temporal_scope in [habitual,historical,unknown]"
+      - "frequency in [often,usually,always,never] 或存在明确自我归类"
+    operation: "ADD_TRAIT_EVIDENCE"
+    priority: 70
+  behavior_episode_evidence:
+    match_when:
+      - "subject == user"
+      - "描述一个真实发生的选择、反应或行动"
+    operation: "ADD_SCENARIO_EVIDENCE_AND_MAYBE_TRAIT_EVIDENCE"
+    priority: 60
+  language_observation:
+    match_when:
+      - "来自用户真实表达的可统计形式特征"
+      - "或用户明确描述自己的说话方式"
+    operation: "UPDATE_LANGUAGE_OBSERVATION"
+    priority: 50
+  ignore_for_profile:
+    match_when:
+      - "subject != user 且不是用户对自身关系模式的反应"
+      - "modality in [hypothetical,quoted]"
+      - "只是知识问答、角色扮演或复述他人观点"
+      - "无法解析否定或讽刺范围"
+    operation: "NO_PROFILE_UPDATE"
+
+evidence_types:
+  explicit_correction:
+    base_reliability: 1.0
+    persistence: "until_corrected_again"
+    max_trait_delta: 0.10
+  explicit_self_report:
+    base_reliability: 0.90
+    persistence: "long_term"
+    max_trait_delta: 0.06
+  explicit_interaction_preference:
+    base_reliability: 0.95
+    persistence: "until_corrected"
+    max_preference_delta: 1.0
+  repeated_behavior:
+    base_reliability: 0.75
+    persistence: "long_term"
+    minimum_independent_sessions: 3
+    max_trait_delta: 0.04
+  observed_choice:
+    base_reliability: 0.65
+    persistence: "medium_term"
+    max_trait_delta: 0.03
+  single_behavior_inference:
+    base_reliability: 0.35
+    persistence: "candidate_until_repeated"
+    max_trait_delta: 0.02
+  language_observation:
+    base_reliability: 0.55
+    persistence: "rolling_window"
+    minimum_tokens_before_stable_update: 500
+  current_state:
+    base_reliability: 0.85
+    persistence: "ttl"
+    max_state_delta: 0.40
+  event_memory:
+    base_reliability: 0.90
+    persistence: "event_specific"
+  cold_start_prior:
+    base_reliability: 0.35
+    persistence: "until_calibrated"
+    priority: "lowest"
+  expert_override:
+    base_reliability: 1.0
+    persistence: "rule_version_or_until_corrected"
+
+language_understanding_rules:
+  negation:
+    examples:
+      - input: "我不喜欢聚会"
+        normalized: "like_social_gathering=false"
+      - input: "我不是不喜欢聚会，只是结束后很累"
+        normalized:
+          - "like_social_gathering=uncertain_or_positive"
+          - "social_interaction_causes_fatigue=true"
+    rule: "否定作用域必须落到具体谓词；双重否定不可直接按关键词极性处理。"
+  contrast:
+    examples:
+      - input: "我愿意认识新人，但不会主动开口"
+        normalized:
+          - "openness_to_people=positive"
+          - "social_initiation=negative"
+    rule: "转折前后拆成两个frame，允许不同字段获得相反方向证据。"
+  context_specificity:
+    example: "我工作时很有计划，周末完全随性"
+    rule: >-
+      分别写入work与leisure场景证据；只有跨场景重复时才明显更新全局structure_pref。
+  temporal_scope:
+    examples:
+      - input: "我今天不想说话"
+        route: "current_state"
+      - input: "我一直不太爱说话"
+        route: "trait_evidence.extroversion_negative"
+  frequency:
+    weights:
+      once: 0.25
+      sometimes: 0.45
+      often: 0.70
+      usually: 0.85
+      always: 1.0
+      never: 1.0
+      unknown: 0.40
+  uncertainty:
+    markers: ["可能", "也许", "好像", "我不确定", "有时候觉得"]
+    rule: "降低explicitness，不得按明确自述处理。"
+  quotation_and_other_people:
+    rule: "‘我朋友很外向’只写朋友实体记忆，不更新用户extroversion。"
+  sarcasm:
+    rule: "讽刺识别置信度不足时不更新人格，只保留候选语言观察。"
+
+trait_mapping_rules:
+  extroversion:
+    positive_generalizations:
+      - "社交后精力增加或独处过久感到低落"
+      - "习惯主动开启对话、认识新人或在群体中表达"
+      - "经常通过找人聊天释放压力"
+    negative_generalizations:
+      - "社交后需要独处恢复"
+      - "长期偏好独处、小范围互动或较少主动开场"
+      - "压力下更想自己消化而不是找人"
+    do_not_infer_from:
+      - "单次没回复"
+      - "某次会议沉默"
+      - "用户说自己害羞但同时喜欢社交；需要拆分confidence和initiation"
+    affected_source_fields:
+      behavior_scenarios: ["first_meeting", "stress_response", "energy_source"]
+      language_sections: ["speaking_style", "emotion_expression"]
+      mbti_dimension: "ei"
+  social_warmth:
+    positive_generalizations:
+      - "长期主动关心、倾听、照顾或让他人感到被支持"
+      - "表达关怀时愿意投入时间和情绪"
+    negative_generalizations:
+      - "稳定保持情感距离或很少回应他人感受"
+      - "明确偏好只处理事情、不进行关系维护"
+    do_not_infer_from:
+      - "拒绝一次请求"
+      - "设置合理边界"
+    affected_source_fields:
+      behavior_scenarios: ["first_meeting", "familiar_relationship", "helping_others", "being_needed", "conflict"]
+      language_sections: ["speaking_style", "emotion_expression", "typical_utterances"]
+  assertiveness:
+    positive_generalizations:
+      - "稳定直接表达立场、争取资源或承担拍板责任"
+      - "被误解或冲突时会清晰解释并提出边界"
+    negative_generalizations:
+      - "习惯等他人先表态、回避决定或不敢争取"
+      - "即使有意见也长期不表达"
+    do_not_infer_from:
+      - "礼貌或温和"
+      - "一次让步"
+    affected_source_fields:
+      behavior_scenarios: ["decision", "being_misunderstood", "conflict"]
+      language_sections: ["speaking_style", "typical_utterances", "rare_utterances"]
+  impulsivity:
+    positive_generalizations:
+      - "多次描述先行动后思考、说完后悔或情绪来时立即反应"
+      - "高频临时决定且缺少事前检查"
+    negative_generalizations:
+      - "长期在表达和行动前检查、等待或反复考虑"
+      - "冲突中仍能延迟反应"
+    do_not_infer_from:
+      - "一次快速回复"
+      - "紧急情况下的迅速行动"
+    affected_source_fields:
+      behavior_scenarios: ["decision", "being_urged", "being_misunderstood", "conflict"]
+      language_sections: ["speaking_style", "emotion_expression"]
+  openness:
+    positive_generalizations:
+      - "经常主动尝试新方法、探索新概念或欢迎变化"
+      - "面对新信息愿意修正原有观点"
+    negative_generalizations:
+      - "稳定优先经验、熟悉方法和确定性"
+      - "对非传统方案长期排斥"
+    do_not_infer_from:
+      - "拒绝一个具体建议"
+      - "因风险或成本原因暂不尝试"
+    affected_source_fields:
+      behavior_scenarios: ["task_received", "facing_change"]
+      language_sections: ["speaking_style", "humor", "typical_utterances"]
+      mbti_dimension: "sn"
+  creativity:
+    positive_generalizations:
+      - "跨场景产生多个新方案、类比或重新定义问题"
+      - "习惯组合不相关概念并提出非模板做法"
+    negative_generalizations:
+      - "明确更擅长照模板执行或很少产生新方案"
+      - "重复依赖已有路径且不做变体"
+    do_not_infer_from:
+      - "单个好点子"
+      - "知识丰富但没有新组合"
+    affected_source_fields:
+      behavior_scenarios: ["task_received", "task_progress", "helping_others"]
+      language_sections: ["speaking_style", "humor", "typical_utterances"]
+  depth_of_thought:
+    positive_generalizations:
+      - "稳定追问原因、反事实、长期影响或系统性问题"
+      - "做决定前反复推演并能说明因果链"
+    negative_generalizations:
+      - "长期偏好快速结论且较少追问依据"
+      - "明确表示不愿深入分析"
+    do_not_infer_from:
+      - "回复短"
+      - "对某个不重要话题不深入"
+    affected_source_fields:
+      behavior_scenarios: ["decision", "after_error"]
+      language_sections: ["speaking_style", "typical_utterances"]
+  thinking_ratio:
+    positive_generalizations:
+      - "决策时稳定优先数据、事实、逻辑、利弊和可验证依据"
+      - "帮助别人时更常给出结构化方案"
+    negative_generalizations:
+      - "决策时稳定优先感受、价值、关系和直觉"
+      - "即使逻辑收益更高也会因价值不符拒绝"
+    do_not_infer_from:
+      - "有情绪"
+      - "一次使用数据或一次被感动"
+    affected_source_fields:
+      behavior_scenarios: ["decision", "helping_others", "being_misunderstood", "conflict"]
+      language_sections: ["speaking_style", "typical_utterances"]
+      mbti_dimension: "tf"
+  empathy:
+    positive_generalizations:
+      - "多次准确识别他人情绪并先回应感受"
+      - "安慰时能复述对方处境、询问需要而不是立即说教"
+    negative_generalizations:
+      - "长期难以识别情绪或只处理问题、不回应感受"
+      - "明确说自己不擅长安慰人"
+    do_not_infer_from:
+      - "给建议"
+      - "没有同意对方"
+    affected_source_fields:
+      behavior_scenarios: ["helping_others", "being_misunderstood", "conflict", "familiar_relationship"]
+      language_sections: ["speaking_style", "emotion_expression", "typical_utterances"]
+  risk_tolerance:
+    positive_generalizations:
+      - "在理解风险后仍愿意试错、迭代或承担不确定性"
+      - "失败后愿意再次尝试"
+    negative_generalizations:
+      - "没有充分把握不行动或优先避免损失"
+      - "长期选择稳定方案，即使潜在收益更高"
+    do_not_infer_from:
+      - "违法或无准备的冒险"
+      - "因资源不足拒绝尝试"
+    affected_source_fields:
+      behavior_scenarios: ["obstacle", "facing_change", "decision"]
+      language_sections: ["typical_utterances"]
+  structure_pref:
+    positive_generalizations:
+      - "稳定要求步骤、清单、边界、模板或明确标准后才行动"
+      - "临时变化会造成明显不适并需要重新规划"
+    negative_generalizations:
+      - "偏好即兴、灵感驱动、多线跳跃和随时改计划"
+      - "认为计划会束缚自己"
+    do_not_infer_from:
+      - "对高风险任务要求流程"
+      - "一次列清单"
+    affected_source_fields:
+      behavior_scenarios: ["task_received", "task_progress", "decision", "being_urged", "facing_change", "stress_response"]
+      language_sections: ["speaking_style", "typical_utterances", "rare_utterances"]
+      mbti_dimension: "jp"
+  discipline:
+    positive_generalizations:
+      - "在缺少监督和兴趣时仍按时、按标准完成"
+      - "出错后建立检查步骤并持续执行"
+    negative_generalizations:
+      - "稳定依赖催促、截止日期或外部监督"
+      - "经常知道该做但无法按计划执行"
+    do_not_infer_from:
+      - "一次拖延"
+      - "因生病、资源不足或优先级变化而未完成"
+    affected_source_fields:
+      behavior_scenarios: ["task_received", "task_progress", "being_urged", "after_error", "being_needed"]
+      language_sections: ["typical_utterances", "rare_utterances"]
+  adaptability:
+    positive_generalizations:
+      - "变化后快速接受新条件、提出替代路径并恢复行动"
+      - "在不同人和场景间能调整表达与策略"
+    negative_generalizations:
+      - "临时变化后长时间卡住或坚持原方案"
+      - "需要较长时间才能进入新节奏"
+    do_not_infer_from:
+      - "坚持原则"
+      - "拒绝不合理变化"
+    affected_source_fields:
+      behavior_scenarios: ["task_progress", "obstacle", "after_error", "facing_change"]
+      language_sections: ["speaking_style"]
+  persistence:
+    positive_generalizations:
+      - "新鲜感消退或受阻后仍持续跟进"
+      - "长期记得承诺、回访并完成收尾"
+    negative_generalizations:
+      - "反复开始很多事情但很少收尾"
+      - "遇到新刺激后经常遗忘原目标"
+    do_not_infer_from:
+      - "合理停止低价值目标"
+      - "更换更优方案但目标未变"
+    affected_source_fields:
+      behavior_scenarios: ["task_progress", "obstacle", "being_needed", "familiar_relationship"]
+      language_sections: ["rare_utterances"]
+  confidence:
+    positive_generalizations:
+      - "能表达判断、接受被质疑并相信自己可以修正"
+      - "完成任务后能客观看到自己的贡献"
+    negative_generalizations:
+      - "长期依赖外部肯定、过度自责或不敢争取"
+      - "即使有证据也持续否定自己的能力"
+    do_not_infer_from:
+      - "谦虚"
+      - "承认错误"
+    affected_source_fields:
+      behavior_scenarios: ["obstacle", "after_error", "being_misunderstood", "confidence_state"]
+      language_sections: ["speaking_style", "typical_utterances"]
+  optimism:
+    positive_generalizations:
+      - "受挫后仍相信问题可改善并能重新行动"
+      - "长期预期努力可能带来正向结果"
+    negative_generalizations:
+      - "跨场景长期预期失败、无解或坏结果"
+      - "受挫后持续无法恢复且形成稳定解释模式"
+    do_not_infer_from:
+      - "现实评估风险"
+      - "一次心情低落"
+    affected_source_fields:
+      behavior_scenarios: ["after_error", "optimism_state"]
+      language_sections: ["emotion_expression", "typical_utterances"]
+  romantic_orientation:
+    positive_generalizations:
+      - "长期重视亲密连接、陪伴、主动表达和关系维护"
+      - "愿意为重要关系持续投入时间和行动"
+    negative_generalizations:
+      - "明确低关系投入、更重独立或不愿投入情绪资源"
+      - "长期回避亲密连接且本人认可这一模式"
+    do_not_infer_from:
+      - "当前单身"
+      - "拒绝某个人"
+      - "设置关系边界"
+    affected_source_fields:
+      behavior_scenarios: ["familiar_relationship", "being_needed", "romantic_interaction"]
+      language_sections: ["emotion_expression", "typical_utterances"]
+
+behavior_scenario_maintenance:
+  update_strategy: >-
+    每个场景同时允许direct_evidence和derived_drivers。直接证据只更新该场景；
+    达到跨会话重复阈值后才向相关17维反向提供小步证据。
+  scenarios:
+    task_received:
+      recognize: ["接到任务后的第一反应", "是否先问标准", "是否先判断有趣/意义", "是否立即行动"]
+    task_progress:
+      recognize: ["推进节奏", "多线或单线", "是否按计划", "是否持续收尾"]
+    obstacle:
+      recognize: ["受阻后的换路/硬扛/求助/放弃", "归因方式"]
+    decision:
+      recognize: ["数据/感受/直觉/他人意见的权重", "拍板速度"]
+    being_urged:
+      recognize: ["被催后的焦虑、反感、提速、质量变化"]
+    after_error:
+      recognize: ["自责、归因、复盘、翻篇和改进动作"]
+    facing_change:
+      recognize: ["临时变化后的接受速度和替代方案"]
+    first_meeting:
+      recognize: ["与陌生人的主动程度、距离和温度"]
+    familiar_relationship:
+      recognize: ["熟悉后是否记得细节、持续关心、表达真实感受"]
+    helping_others:
+      recognize: ["先共情还是先方案", "建议是否可操作", "投入程度"]
+    being_needed:
+      recognize: ["承诺、完成、过度承担、边界和持续性"]
+    being_misunderstood:
+      recognize: ["解释、沉默、情绪、攻击、求理解"]
+    conflict:
+      recognize: ["争理/争人、调和、回避、边界、情绪控制"]
+    romantic_interaction:
+      recognize: ["主动表达、关系投入、陪伴、空间、持续性"]
+    confidence_state:
+      recognize: ["对自我能力的陈述和对反馈的反应"]
+    optimism_state:
+      recognize: ["对未来、失败和可改善性的稳定解释"]
+    stress_response:
+      recognize: ["倾诉/独处/控制流程/逃避/寻求方案"]
+    energy_source:
+      recognize: ["社交或独处后能量变化"]
+  regeneration_rule: >-
+    核心driver稳定变化>=0.04、场景新增高可靠直接证据、或旧场景confidence下降时，
+    只重建受影响场景；不要每轮重写全部18项。
+
+language_style_maintenance:
+  observation_windows:
+    short: "最近20条用户消息"
+    medium: "最近500至2000个有效token"
+    long: "跨至少5个会话的聚合统计"
+  speaking_style_features:
+    observable_signals:
+      - "平均句长与长短句比例"
+      - "问句、断言、祈使句比例"
+      - "缓和词、绝对词、因果词、数据词、感受词比例"
+      - "话题跳转、补充说明、自我修正频率"
+      - "赞美、鼓励、道歉、反问、举例、比喻的使用"
+    update_rule: >-
+      达到最小样本量后UPSERT speaking_style条目；真实观察origin=observed，
+      优先级高于冷启动derived，但不得把机器人诱导出的单次表达当稳定风格。
+  humor:
+    observable_signals:
+      - "自嘲、冷幽默、概念类比、夸张、情境吐槽、双关"
+      - "用户对机器人幽默的接受、忽略或明确拒绝"
+    update_rule: "跨会话重复类型形成条目；明确拒绝立即更新runtime.humor_level，不必降低用户自身幽默能力。"
+  emotion_expression:
+    observable_signals:
+      - "直接命名情绪或通过事实间接表达"
+      - "情绪强度、持续时间、分享需求和恢复方式"
+      - "用行动、文字、沉默、求助或方案表达在乎"
+    update_rule: "本轮内容先写state；跨会话稳定表达模式才进入language_style.emotion_expression。"
+  typical_utterances:
+    contexts:
+      asked_for_opinion: "用户真实被征求意见时的表达"
+      praised: "用户被夸后的表达"
+      criticized: "用户被批评后的表达"
+      expressing_dissatisfaction: "用户表达不满时的表达"
+      saying_no: "用户拒绝时的表达"
+      comforting: "用户安慰他人时的表达"
+      sharing_good_news: "用户分享好消息时的表达"
+      nervous: "用户紧张时的表达"
+      relaxed: "用户放松时的表达"
+    update_rule: >-
+      只有识别到对应真实语境，才把脱敏后的表达模式写为observed；
+      没有直接观察时由17维模板维持derived候选。
+  rare_utterances:
+    rule: >-
+      “极少说”不能由缺失统计直接断言。必须有用户明确自述、足够长观察窗口中的稳定缺失，
+      或与高置信度人格强相关；confidence上限0.55，直到出现反例。
+  cardinality_policy: >-
+    与原始案例保持展示目标：说话方式6、幽默3、情绪表达4、典型话术9个固定场景、极少话术5；
+    存储层允许更多候选，展示层按confidence与区分度选择目标数量。
+
+portrait_regeneration:
+  direct_write_allowed: false
+  trigger_when:
+    - "任一核心维度稳定变化>=0.05"
+    - "至少3个核心维度confidence跨越0.60"
+    - "用户明确纠正人物总结"
+    - "专家发布新的portrait模板版本"
+  correction_policy: >-
+    用户说“这段不像我”时，先把相关摘要标为invalidated，询问或抽取具体不符合之处，
+    将其路由到基础字段；基础字段更新后再生成essence/strengths/weaknesses/core_tension/suitable_roles。
+
+runtime_state_and_memory:
+  current_state:
+    emotion:
+      ttl: "2h"
+      merge: "new_explicit_state_overwrites_same_emotion_dimension"
+    stress_level:
+      ttl: "24h"
+      decay: "exponential_half_life_8h"
+    energy_level:
+      ttl: "12h"
+      decay: "exponential_half_life_4h"
+    guardrail: "state永不直接修改17维；重复跨会话模式可另形成trait evidence。"
+  memories:
+    fact: "用户明确提供且可更正"
+    preference: "对象/活动偏好；与机器人交互偏好分开"
+    event: "包含时间、人物、状态和完成情况"
+    relationship: "人物、关系、称呼和重要性"
+    commitment: "用户或机器人承诺及截止时间"
+    forgetting: "用户要求忘记时失效或删除相关memory与派生evidence。"
+
+update_operators:
+  SET_FACT:
+    targets: ["identity.display_name", "identity.birth_date", "identity.birth_time", "identity.timezone"]
+    rule: "只接受明确用户信息或授权上下文；更正时触发相关派生重算。"
+  SET_STATE:
+    targets: ["runtime.current_state.emotion", "runtime.current_state.stress_level", "runtime.current_state.energy_level"]
+    rule: "带TTL和source_message_id。"
+  UPSERT_MEMORY:
+    targets: ["runtime.memories"]
+    rule: "按entity+predicate+time去重；保留来源和更正链。"
+  SET_INTERACTION_PREFERENCE:
+    targets:
+      - "runtime.interaction_preferences.response_length"
+      - "runtime.interaction_preferences.directness"
+      - "runtime.interaction_preferences.empathy_first"
+      - "runtime.interaction_preferences.question_load"
+      - "runtime.interaction_preferences.humor_level"
+    rule: "用户明确指令立即生效，不修改17维。"
+  ADD_TRAIT_EVIDENCE:
+    targets: "all 17 core_traits fields"
+    rule: "通过trait_mapping_rules路由；不可写未知字段。"
+  UPSERT_SCENARIO_EVIDENCE:
+    targets: "all 18 behavior_style scenarios"
+    rule: "直接证据更新场景，重复后才反馈到trait。"
+  UPDATE_LANGUAGE_OBSERVATION:
+    targets:
+      - "language_style.speaking_style"
+      - "language_style.humor"
+      - "language_style.emotion_expression"
+      - "language_style.typical_utterances"
+      - "language_style.rare_utterances"
+    rule: "使用滚动窗口、样本量和origin。"
+  REBUILD_DERIVED:
+    targets:
+      - "mbti_dimensions"
+      - "behavior_style affected scenarios"
+      - "language_style derived candidates"
+      - "portrait"
+
+update_math:
+  evidence_impact: >-
+    reliability * explicitness * frequency_factor * context_relevance * freshness * independence * rule_weight
+  trait_update: "new_value = clip(old_value + direction * base_delta * evidence_impact, 0, 1)"
+  confidence_merge: "new_conf = 1 - (1-old_conf) * (1-evidence_impact*independence)"
+  conflict_penalty: "final_conf = new_conf * (1-conflict_ratio*0.5)"
+  no_op_threshold: 0.01
+  same_message_same_target_cap: 0.06
+  maximum_total_trait_change_per_turn: 0.10
+  cold_start_displacement: >-
+    当可靠对话证据与cold_start_prior冲突时，先降低先验有效权重；
+    不要求对话证据“击败”大量同源冷启动碎片。
+
+conflict_and_versioning:
+  priority_order:
+    - "expert_override"
+    - "explicit_correction"
+    - "explicit_self_report_or_interaction_preference"
+    - "repeated_behavior"
+    - "observed_choice"
+    - "single_behavior_inference"
+    - "cold_start_prior"
+  rules:
+    - "同一消息幂等键重复时返回原结果，不重复累计。"
+    - "同一事件被重复讲述时链接同一event_id。"
+    - "相反证据来自不同场景时允许形成context-specific profile，而不是强行平均。"
+    - "expected_profile_version不匹配时返回冲突，由调用方重新读取后重放。"
+    - "画像版本只在有效变化、事实更正或记忆变化时创建。"
+
+reply_hint_generation:
+  safety_priority: "highest"
+  rules:
+    - condition: "runtime.current_state.stress_level >= 0.70"
+      output: { max_sentences: 3, empathy_first: true, question_count: 1, humor_level: 0.0 }
+    - condition: "runtime.current_state.energy_level <= 0.30"
+      output: { structure_level: "simple", action_count: 1, allow_resume_later: true }
+    - condition: "runtime.interaction_preferences.response_length == short"
+      output: { max_sentences: 3, answer_first: true }
+    - condition: "core_traits.structure_pref.value >= 0.67"
+      output: { structure_level: "steps", options_max: 3 }
+    - condition: "core_traits.structure_pref.value <= 0.33"
+      output: { structure_level: "flexible_options", avoid_rigid_plan: true }
+    - condition: "core_traits.empathy.value >= 0.67 or runtime.interaction_preferences.empathy_first >= 0.67"
+      output: { empathy_first: true, ask_support_or_solution: true }
+    - condition: "core_traits.thinking_ratio.value >= 0.67"
+      output: { evidence_first: true, include_tradeoffs: true }
+    - condition: "core_traits.thinking_ratio.value <= 0.33"
+      output: { values_and_feelings_first: true, advice_load: "light" }
+    - condition: "core_traits.confidence.value <= 0.33"
+      output: { use_specific_acknowledgement: true, avoid_global_judgment: true }
+    - condition: "profile.overall_confidence < 0.40"
+      output: { use_tentative_language: true, calibration_question_count: 1 }
+
+generalized_examples:
+  - input: "我今天开了一天会，现在只想自己待会儿。"
+    frames:
+      - { domain: "emotion", temporal_scope: "now", predicate: "need_solitude_to_recover" }
+    operations:
+      - "SET_STATE energy_level downward"
+      - "ADD single candidate extroversion-negative evidence; do not commit trait unless repeated or explicitly habitual"
+  - input: "我每次跟很多人待完都要独处半天。"
+    frames:
+      - { domain: "habit", frequency: "always", predicate: "socializing_requires_solitude_recovery" }
+    operations:
+      - "ADD_TRAIT_EVIDENCE extroversion negative"
+      - "UPSERT_SCENARIO_EVIDENCE energy_source"
+      - "REBUILD mbti.ei and affected language candidates"
+  - input: "我愿意认识新人，但一般不会主动搭话。"
+    operations:
+      - "openness/social_warmth candidate positive"
+      - "assertiveness or social initiation evidence negative"
+      - "do not collapse into a single extroversion conclusion"
+  - input: "工作我一定列计划，出去玩就随便。"
+    operations:
+      - "task scenarios structure positive in work context"
+      - "leisure context structure negative"
+      - "global structure_pref changes only slightly until cross-context evidence appears"
+  - input: "其实你说错了，我一点都不讨厌计划。"
+    operations:
+      - "explicit_correction invalidates conflicting cold_start prior"
+      - "structure_pref positive evidence"
+      - "regenerate task_received/task_progress/facing_change and mbti.jp"
+  - input: "以后别一上来给建议，先听我把话说完。"
+    operations:
+      - "SET_INTERACTION_PREFERENCE empathy_first high"
+      - "SET_INTERACTION_PREFERENCE question/advice load lower"
+      - "do not update user empathy trait"
+  - input: "这次我拖到最后是因为医院临时通知，不是我平时拖延。"
+    operations:
+      - "store event cause"
+      - "do not infer discipline negative"
+      - "if prior inference exists, reduce or invalidate it"
+  - input: "我总是先把数据列出来，再看自己能不能接受。"
+    operations:
+      - "thinking_ratio positive"
+      - "depth_of_thought positive candidate"
+      - "decision scenario direct evidence"
+  - input: "我知道方案A更赚钱，但我不想用伤害别人的方式。"
+    operations:
+      - "thinking_ratio not necessarily low"
+      - "record value-based constraint and empathy candidate"
+      - "decision frame contains logic plus values; preserve both"
+  - input: "别人难过时我真不知道说什么，通常只能帮他解决问题。"
+    operations:
+      - "empathy expression/comforting skill negative candidate"
+      - "thinking_ratio positive candidate"
+      - "typical_utterances.comforting direct evidence"
+  - input: "计划突然变了我会烦，但很快就能换个方案。"
+    operations:
+      - "structure_pref positive"
+      - "adaptability positive"
+      - "facing_change stores both initial emotion and recovery behavior"
+  - input: "我答应别人的事会一直记着，做完才放心。"
+    operations:
+      - "persistence positive"
+      - "discipline positive"
+      - "being_needed scenario positive"
+  - input: "我刚才很生气，现在已经没事了。"
+    operations:
+      - "current emotion correction/termination"
+      - "do not update optimism or impulsivity from this alone"
+  - input: "我朋友特别冲动，总是说完就后悔。"
+    operations:
+      - "store optional friend memory"
+      - "NO_PROFILE_UPDATE for user impulsivity"
+  - input: "如果是我，我可能会先试一下，不过我也不确定。"
+    operations:
+      - "risk_tolerance positive low-explicitness candidate"
+      - "no stable update unless repeated"
+  - input: "别再记我生日了，也不要用生日分析我。"
+    operations:
+      - "revoke sensitive inference consent"
+      - "forget birth-derived evidence according to policy"
+      - "retain only permitted dialogue evidence"
+
+coverage_manifest:
+  direct_or_evidence_update_paths:
+    identity_fields: "covered by SET_FACT"
+    all_17_core_traits: "covered by trait_mapping_rules"
+    all_18_behavior_scenarios: "covered by behavior_scenario_maintenance"
+    all_5_language_groups: "covered by language_style_maintenance"
+    runtime_preferences: "covered by SET_INTERACTION_PREFERENCE"
+    runtime_state: "covered by SET_STATE"
+    runtime_memories: "covered by UPSERT_MEMORY"
+  derived_update_paths:
+    all_4_mbti_dimensions_and_label: "derived from core traits"
+    all_5_portrait_fields: "derived by portrait_regeneration"
+    birth_analysis: "recomputed only when birth facts or expert calculator version changes"
+  source_profile_totals:
+    mbti_dimensions: 4
+    core_traits: 17
+    behavior_scenarios: 18
+    language_groups: 5
+    portrait_fields: 5
+
+expert_authoring_contract:
+  rule_unit_template:
+    id: "unique string"
+    semantic_pattern: "对semantic_frame的条件，不只写关键词"
+    positive_examples: "string[]"
+    negative_examples: "string[]"
+    counterexamples: "看似匹配但不得更新的string[]"
+    target_paths: "schema path[]"
+    operation: "one of update_operators"
+    direction: "-1|0|1"
+    base_delta: "0..0.10"
+    evidence_type: "enum"
+    context_scope: "enum[]"
+    temporal_requirement: "enum"
+    recurrence_requirement: "integer"
+    explanation_template: "string"
+    status: "draft|reviewed|published|retired"
+  expert_editable:
+    - "trait_mapping_rules中的正反泛化语义与反例"
+    - "场景recognize列表和场景到17维的反馈关系"
+    - "语言观察特征、最小样本量与展示模板"
+    - "更新步长、重复阈值和置信度参数"
+    - "画像摘要模板与禁用措辞"
+  engineering_owned:
+    - "semantic_frame JSON Schema"
+    - "字段路径校验"
+    - "否定/指代/主体识别的技术实现"
+    - "幂等、冲突、版本、审计、删除和权限"
+    - "规则编译、自动测试与灰度发布"

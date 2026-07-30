@@ -1,0 +1,458 @@
+schema_version: "2.0.0"
+document_type: "canonical_human_profile_schema"
+language: "zh-CN"
+
+purpose:
+  subject: "与陪伴机器人交互的真人用户"
+  definition: >-
+    本文件定义机器人在内部维护的“对真人的认识”。机器人自身性格不在本文件中。
+    三份原始案例是同一结构的三个真人画像实例，本结构以它们共同出现的四个工作表为准。
+  source_files:
+    - "1988年8月9日_机器人性格设定.xlsx"
+    - "1989年10月15日_机器人性格设定.xlsx"
+    - "1998年12月6日_机器人性格设定.xlsx"
+  source_sections:
+    - "性格总览"
+    - "行为风格"
+    - "语言风格"
+    - "人物画像"
+
+design_rules:
+  - "事实、长期人格、场景行为、语言风格、短期状态、事件记忆必须分开存储。"
+  - "任何推断字段都必须同时保存 value/content、confidence、evidence_refs、updated_at、profile_version。"
+  - "冷启动只提供低置信度先验；对话证据可以校准或推翻先验。"
+  - "短期状态不得直接覆盖长期人格。"
+  - "场景行为、语言风格和人物画像是可重建的派生层，不是独立真值。"
+  - "运行时扩展字段与原始案例字段分区，不能混称为原始结构。"
+
+common_types:
+  score:
+    type: "number"
+    minimum: 0.0
+    maximum: 1.0
+  confidence:
+    type: "number"
+    minimum: 0.0
+    maximum: 1.0
+  evidence_ref:
+    type: "string"
+    description: "指向独立证据对象，不在画像字段中复制原始对话。"
+  parameter_ref:
+    type: "object"
+    required: [field, value]
+    properties:
+      field: { type: "string" }
+      value: { type: "number", minimum: 0.0, maximum: 1.0 }
+      confidence: { type: "number", minimum: 0.0, maximum: 1.0 }
+
+canonical_profile:
+  identity:
+    source_alignment: "原始标题与会议需求"
+    mutability: "user_correctable_fact"
+    fields:
+      user_id:
+        type: "string"
+        required: true
+        update_mode: "system_set_once"
+      display_name:
+        type: ["string", "null"]
+        required: false
+        update_mode: "explicit_user_set_or_correct"
+      birth_date:
+        type: ["string", "null"]
+        format: "date"
+        sensitive: true
+        update_mode: "explicit_user_set_or_correct"
+      birth_time:
+        type: ["string", "null"]
+        format: "time"
+        sensitive: true
+        update_mode: "explicit_user_set_or_correct"
+        note: "三份案例未使用时辰；当前允许为空。"
+      timezone:
+        type: ["string", "null"]
+        update_mode: "explicit_or_device_context"
+
+  birth_analysis:
+    source_alignment: "性格总览第2行元数据"
+    role: "cold_start_candidate_features"
+    mutability: "recomputed_when_birth_fact_changes"
+    fields:
+      bazi_text:
+        type: ["string", "null"]
+        examples: ["戊辰 庚申 丙申", "己巳 甲戌 戊申", "戊寅 癸亥 丁亥"]
+      day_master:
+        type: ["string", "null"]
+        examples: ["丙火", "戊土", "丁火"]
+      pattern_name:
+        type: ["string", "null"]
+        examples: ["偏财格", "七杀格"]
+      strength_label:
+        type: ["string", "null"]
+        enum: ["身强", "身弱", null]
+      relation_markers:
+        type: "object"
+        properties:
+          combinations: { type: "integer", minimum: 0 }
+          self_punishments: { type: "integer", minimum: 0 }
+          other_punishments: { type: "integer", minimum: 0 }
+          clashes: { type: "integer", minimum: 0 }
+          harms: { type: "integer", minimum: 0 }
+          source_text: { type: ["string", "null"] }
+      numerology_code:
+        type: ["string", "null"]
+        pattern: "^[0-9]{4}$"
+        source_alignment: "3人-数字学标签.docx"
+        note: "通用计算公式尚需专家补齐；不能仅凭三个样例反推并宣称通用。"
+
+  mbti_dimensions:
+    source_alignment: "性格总览 / 一、MBTI四维度量化"
+    role: "derived_display_dimensions"
+    update_mode: "derive_from_core_traits_then_allow_expert_calibration"
+    fields:
+      ei:
+        meaning: "0=I，1=E"
+        primary_driver: "core_traits.extroversion"
+        value_type: "score"
+      sn:
+        meaning: "0=S，1=N"
+        primary_driver: "core_traits.openness"
+        secondary_driver: "core_traits.creativity"
+        value_type: "score"
+      tf:
+        meaning: "0=F，1=T"
+        primary_driver: "core_traits.thinking_ratio"
+        value_type: "score"
+      jp:
+        meaning: "0=P，1=J"
+        primary_driver: "core_traits.structure_pref"
+        secondary_driver: "core_traits.discipline"
+        value_type: "score"
+      type_label:
+        type: ["string", "null"]
+        pattern: "^[EIX][SNX][TFX][JPX]$"
+        derivation: "由四个连续维度生成；0.45至0.55可用X或弱倾向，不是独立真值。"
+
+  core_traits:
+    source_alignment: "性格总览 / 二、17个行为参数"
+    storage_shape:
+      value: "score"
+      confidence: "confidence"
+      tendency_label: "string"
+      interpretation: "string"
+      evidence_refs: "evidence_ref[]"
+      updated_at: "timestamp"
+    categories:
+      energy_mode:
+        chinese_name: "能量模式"
+        fields:
+          extroversion:
+            chinese_name: "外向性"
+            definition: "社交互动带来能量、主动表达与接近他人的稳定倾向。"
+            low_anchor: "独处充电；社交后需要恢复；较少主动开启互动。"
+            high_anchor: "社交充电；主动表达；喜欢在人际互动中获得能量。"
+          social_warmth:
+            chinese_name: "社交温度"
+            definition: "待人热情、亲近、关怀和让他人感到被接住的程度。"
+            low_anchor: "克制、保持距离、情绪表达较少。"
+            high_anchor: "热情、关心、愿意倾听和给予情感支持。"
+          assertiveness:
+            chinese_name: "果断性"
+            definition: "表达立场、争取资源、承担拍板责任的倾向。"
+            low_anchor: "等待他人先表态；回避拍板；担心决定错误。"
+            high_anchor: "直接表态；敢争取；愿意承担决定后果。"
+          impulsivity:
+            chinese_name: "冲动性"
+            definition: "行动或表达前过滤程度的反向指标。"
+            low_anchor: "反复思量、谨慎过滤、较少即时行动。"
+            high_anchor: "想到就说或先做再改，容易即时反应。"
+      cognition_mode:
+        chinese_name: "认知模式"
+        fields:
+          openness:
+            chinese_name: "开放性"
+            definition: "偏好新概念、可能性、变化和探索的程度。"
+            low_anchor: "依赖经验、事实和熟悉的方法。"
+            high_anchor: "偏好新鲜、可能性和非传统路径。"
+          creativity:
+            chinese_name: "创造力"
+            definition: "产生新联想、组合概念和打破常规的倾向。"
+            low_anchor: "更擅长沿用成熟模板和做局部优化。"
+            high_anchor: "点子多、跨域联想快、喜欢重新定义问题。"
+          depth_of_thought:
+            chinese_name: "思考深度"
+            definition: "持续分析、追问因果、反思和推演的程度。"
+            low_anchor: "偏快速判断和表层处理。"
+            high_anchor: "反复推演、追问原因并考虑长期影响。"
+      decision_mode:
+        chinese_name: "决策模式"
+        fields:
+          thinking_ratio:
+            chinese_name: "理性决策"
+            definition: "决策中逻辑、事实和利弊相对情感与价值的占比。"
+            low_anchor: "感受、关系和个人价值优先。"
+            high_anchor: "数据、逻辑、可验证事实和利弊优先。"
+          empathy:
+            chinese_name: "共情能力"
+            definition: "识别、理解并回应他人感受的稳定能力与倾向。"
+            low_anchor: "更快进入问题或方案，较少情绪回应。"
+            high_anchor: "先识别感受、复述理解并给予情感支持。"
+          risk_tolerance:
+            chinese_name: "风险容忍度"
+            definition: "面对不确定性、损失可能与试错成本的承受程度。"
+            low_anchor: "优先稳定、充分验证后行动、规避损失。"
+            high_anchor: "愿意试错、快速尝试、不因失败停止探索。"
+      action_mode:
+        chinese_name: "行动模式"
+        fields:
+          structure_pref:
+            chinese_name: "结构化偏好"
+            definition: "对计划、步骤、规则、边界和确定性的偏好。"
+            low_anchor: "即兴、灵感驱动、抗拒固定流程。"
+            high_anchor: "需要计划、清单、边界和可预测流程。"
+          discipline:
+            chinese_name: "自律性"
+            definition: "缺少兴趣或监督时仍按目标和标准执行的程度。"
+            low_anchor: "依赖兴趣、截止日期或外部监督。"
+            high_anchor: "能持续按要求执行并自我约束。"
+          adaptability:
+            chinese_name: "适应性"
+            definition: "变化发生后调整策略、接受新条件和恢复节奏的速度。"
+            low_anchor: "需要较长时间消化变化，偏好维持原计划。"
+            high_anchor: "快速变通、提出替代路径并恢复行动。"
+          persistence:
+            chinese_name: "坚持度"
+            definition: "目标受阻或新鲜感消退后继续投入的程度。"
+            low_anchor: "容易转移兴趣、中途放弃或遗忘原目标。"
+            high_anchor: "长期投入、持续跟进、愿意反复尝试。"
+      self_perception:
+        chinese_name: "自我感知"
+        fields:
+          confidence:
+            chinese_name: "自信度"
+            definition: "对自身判断、能力与应对错误的稳定确信程度。"
+            low_anchor: "需要外部肯定，容易自我怀疑或过度自责。"
+            high_anchor: "敢表达和行动，允许自己犯错并修正。"
+          optimism:
+            chinese_name: "乐观度"
+            definition: "对未来可改善、问题可解决和努力有效的默认预期。"
+            low_anchor: "习惯预想风险、失败或负面结果。"
+            high_anchor: "相信存在转机，失败后较快恢复。"
+      relationship_mode:
+        chinese_name: "关系模式"
+        fields:
+          romantic_orientation:
+            chinese_name: "关系投入"
+            source_aliases: ["对关系态度", "关系投入"]
+            definition: "对亲密关系和情感连接的重视、主动表达与持续投入程度。"
+            low_anchor: "更强调边界、独立和低关系投入。"
+            high_anchor: "重视连接、主动表达、愿意投入时间和情绪。"
+
+  behavior_style:
+    source_alignment: "行为风格"
+    role: "derived_scenario_profile_with_optional_direct_evidence"
+    item_shape:
+      feature: "string"
+      parameter_refs: "parameter_ref[]"
+      explanation: "string"
+      direct_evidence_refs: "evidence_ref[]"
+      generation_rule_id: "string"
+      confidence: "confidence"
+    groups:
+      task_style:
+        chinese_name: "做事方式"
+        scenarios:
+          task_received:
+            source_label: "接到任务"
+            default_drivers: ["openness", "creativity", "structure_pref", "discipline"]
+          task_progress:
+            source_label: "推进过程"
+            default_drivers: ["structure_pref", "discipline", "adaptability", "persistence"]
+          obstacle:
+            source_label: "遇到阻碍"
+            default_drivers: ["adaptability", "risk_tolerance", "persistence", "confidence"]
+          decision:
+            source_label: "做决策"
+            default_drivers: ["thinking_ratio", "assertiveness", "impulsivity", "structure_pref"]
+          being_urged:
+            source_label: "被催促"
+            default_drivers: ["discipline", "structure_pref", "impulsivity", "adaptability"]
+          after_error:
+            source_label: "出错后"
+            default_drivers: ["confidence", "optimism", "discipline", "adaptability"]
+          facing_change:
+            source_label: "面对变化"
+            default_drivers: ["adaptability", "openness", "structure_pref", "risk_tolerance"]
+      relationship_style:
+        chinese_name: "人际关系"
+        scenarios:
+          first_meeting:
+            source_label: "初识阶段"
+            default_drivers: ["extroversion", "social_warmth", "confidence"]
+          familiar_relationship:
+            source_label: "熟识后"
+            default_drivers: ["social_warmth", "empathy", "romantic_orientation", "persistence"]
+          helping_others:
+            source_label: "帮助别人"
+            default_drivers: ["empathy", "thinking_ratio", "social_warmth", "discipline"]
+          being_needed:
+            source_label: "被需要时"
+            default_drivers: ["social_warmth", "discipline", "persistence", "romantic_orientation"]
+          being_misunderstood:
+            source_label: "被误解时"
+            default_drivers: ["confidence", "assertiveness", "empathy", "impulsivity"]
+          conflict:
+            source_label: "冲突中"
+            default_drivers: ["assertiveness", "empathy", "thinking_ratio", "social_warmth", "impulsivity"]
+          romantic_interaction:
+            source_label: "对异性"
+            default_drivers: ["romantic_orientation", "extroversion", "social_warmth", "confidence"]
+      inner_state_style:
+        chinese_name: "内在状态"
+        scenarios:
+          confidence_state:
+            source_label: "自信"
+            default_drivers: ["confidence"]
+          optimism_state:
+            source_label: "乐观/悲观"
+            default_drivers: ["optimism"]
+          stress_response:
+            source_label: "压力状态"
+            default_drivers: ["extroversion", "structure_pref", "empathy", "confidence"]
+          energy_source:
+            source_label: "能量来源"
+            default_drivers: ["extroversion", "social_warmth"]
+
+  language_style:
+    source_alignment: "语言风格"
+    role: "observed_and_derived_profile"
+    general_item_shape:
+      label: "string"
+      behavior: "string"
+      example: ["string", "null"]
+      confidence: "confidence"
+      evidence_refs: "evidence_ref[]"
+      origin: "observed|explicit|derived"
+    groups:
+      speaking_style:
+        source_label: "说话方式"
+        cardinality_target: 6
+        update_sources:
+          - "用户真实语言统计"
+          - "用户明确自述"
+          - "core_traits派生"
+      humor:
+        source_label: "幽默感"
+        cardinality_target: 3
+        update_sources:
+          - "用户使用或回应幽默的真实表现"
+          - "用户明确偏好"
+          - "core_traits派生"
+      emotion_expression:
+        source_label: "情绪表达"
+        cardinality_target: 4
+        update_sources:
+          - "用户明确表达情绪的方式"
+          - "跨会话情绪表达模式"
+          - "core_traits派生"
+      typical_utterances:
+        source_label: "典型话术"
+        fixed_contexts:
+          - { key: "asked_for_opinion", source_label: "被征求意见" }
+          - { key: "praised", source_label: "被夸" }
+          - { key: "criticized", source_label: "被批评" }
+          - { key: "expressing_dissatisfaction", source_label: "表达不满" }
+          - { key: "saying_no", source_label: "说不" }
+          - { key: "comforting", source_label: "安慰人" }
+          - { key: "sharing_good_news", source_label: "分享好消息" }
+          - { key: "nervous", source_label: "紧张时" }
+          - { key: "relaxed", source_label: "放松时" }
+        item_shape:
+          utterance_pattern: "string"
+          example: "string"
+          parameter_refs: "parameter_ref[]"
+          evidence_refs: "evidence_ref[]"
+          confidence: "confidence"
+      rare_utterances:
+        source_label: "极少说的话"
+        cardinality_target: 5
+        item_shape:
+          utterance_or_pattern: "string"
+          reason: "string"
+          evidence_refs: "evidence_ref[]"
+          confidence: "confidence"
+
+  portrait:
+    source_alignment: "人物画像"
+    role: "fully_derived_summary"
+    regeneration: "当任一核心维度稳定变化>=0.05或专家要求时重建；不得直接由单句话覆盖。"
+    fields:
+      essence:
+        source_label: "本质"
+        generation: "最高置信度且最具区分度的3至4个核心维度组合"
+      strengths:
+        source_label: "优势"
+        generation: "高值维度及其在真实场景中的正向表现"
+      weaknesses:
+        source_label: "弱点"
+        generation: "低值维度或高值维度的潜在代价；使用非评判性语言"
+      core_tension:
+        source_label: "核心矛盾"
+        generation: "两个相互牵制且有足够证据的维度组合，必须引用字段和值"
+      suitable_roles:
+        source_label_aliases: ["适合角色", "适合的角色"]
+        generation: "基于优势与场景表现生成互动角色描述；不得替用户做职业决定"
+
+runtime_extensions:
+  source_alignment: "非三份原始案例字段；为陪伴聊天运行所需"
+  separation_rule: "不得写入source_profile_contract；API响应中放在runtime命名空间。"
+  interaction_preferences:
+    fields:
+      response_length: { type: "enum", values: ["short", "medium", "long"] }
+      directness: { type: "score" }
+      empathy_first: { type: "score" }
+      question_load: { type: "score" }
+      humor_level: { type: "score" }
+  current_state:
+    fields:
+      emotion: { type: "object", ttl: "2h" }
+      stress_level: { type: "score", ttl: "24h" }
+      energy_level: { type: "score", ttl: "12h" }
+  memories:
+    item_types: ["fact", "preference", "event", "relationship", "commitment"]
+
+profile_instance_contract:
+  required_top_level_paths:
+    - "identity"
+    - "birth_analysis"
+    - "mbti_dimensions"
+    - "core_traits"
+    - "behavior_style"
+    - "language_style"
+    - "portrait"
+    - "runtime"
+    - "meta"
+  meta_fields:
+    profile_version: "integer"
+    schema_version: "string"
+    rule_pack_versions: "object"
+    overall_confidence: "score"
+    created_at: "timestamp"
+    updated_at: "timestamp"
+
+coverage_manifest:
+  source_fields:
+    mbti_dimension_count: 4
+    core_trait_count: 17
+    behavior_scenario_count: 18
+    language_sections:
+      speaking_style_target: 6
+      humor_target: 3
+      emotion_expression_target: 4
+      typical_utterance_contexts: 9
+      rare_utterance_target: 5
+    portrait_field_count: 5
+  rule_ownership:
+    cold_start: "02_cold_start_rule_system.yaml"
+    dialogue_update: "03_dialogue_profile_maintenance.yaml"
+    implementation: "04_development_spec.md"

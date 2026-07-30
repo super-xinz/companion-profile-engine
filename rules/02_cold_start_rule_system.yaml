@@ -1,0 +1,532 @@
+rule_system_version: "2.0.0-draft"
+document_type: "cold_start_rule_system"
+target_schema: "01_profile_schema.yaml@2.0.0"
+status: "expert_review_required"
+
+objective: >-
+  在仅有生日、用户授权及少量可选事实时，生成一份结构完整但明确低置信度的真人画像先验。
+  输出必须覆盖原始三人案例的所有画像区域，而不是只返回几个标签。
+
+non_goals:
+  - "不证明生日能够科学地决定人格。"
+  - "不输出健康、财富、婚姻、命运等确定性预测。"
+  - "不把冷启动结果锁定为真实人格。"
+  - "不把《3人-数字学标签》中的MBTI猜测覆盖到三份完整画像上。"
+
+input_contract:
+  required:
+    user_id: "string"
+    birth_date: "date"
+    consent_profile: "true"
+    consent_sensitive_inference: "true"
+  optional:
+    display_name: "string|null"
+    birth_time: "time|null"
+    timezone: "string|null"
+  reject_when:
+    - "生日格式非法、为未来日期或超出产品约定范围"
+    - "画像授权为false"
+    - "租户未配置可发布的冷启动规则包"
+
+execution_pipeline:
+  - id: "CS-P01"
+    name: "validate_and_minimize_input"
+    operation: "VALIDATE_INPUT"
+    output: "validated_input"
+  - id: "CS-P02"
+    name: "calculate_birth_features"
+    operation: "CALL_FEATURE_CALCULATORS"
+    output: "birth_analysis"
+  - id: "CS-P03"
+    name: "retrieve_four_domain_rule_fragments"
+    operation: "LOOKUP_RULE_BANK"
+    output: "raw_candidate_fragments"
+  - id: "CS-P04"
+    name: "clean_and_deduplicate_fragments"
+    operation: "CLEAN_RULE_FRAGMENTS"
+    output: "candidate_evidence"
+  - id: "CS-P05"
+    name: "extract_generalized_semantic_signals"
+    operation: "TEXT_TO_SEMANTIC_SIGNALS"
+    output: "semantic_signals"
+  - id: "CS-P06"
+    name: "map_signals_to_17_core_traits"
+    operation: "AGGREGATE_DIMENSION_EVIDENCE"
+    output: "core_traits"
+  - id: "CS-P07"
+    name: "derive_all_source_profile_sections"
+    operation: "REBUILD_DERIVED_PROFILE"
+    output: "mbti_dimensions+behavior_style+language_style+portrait"
+  - id: "CS-P08"
+    name: "apply_confidence_and_guardrails"
+    operation: "CALIBRATE_COLD_START_CONFIDENCE"
+    output: "profile_version_1"
+
+feature_calculators:
+  numerology_code:
+    interface: "BirthFeatureCalculator.calculate_numerology_code(birth_date)"
+    output_pattern: "^[0-9]{4}$"
+    implementation_status: "missing_expert_formula"
+    rule: >-
+      在专家给出可复现公式前，只允许使用显式配置的测试映射；不得根据三个样例自行拟合通用公式。
+    golden_test_mappings:
+      "1998-12-06": "6318"
+      "1989-10-15": "6118"
+      "1988-08-09": "9817"
+  bazi_features:
+    interface: "BirthFeatureCalculator.calculate_bazi(birth_date,birth_time,timezone)"
+    outputs:
+      - "bazi_text"
+      - "day_master"
+      - "pattern_name"
+      - "strength_label"
+      - "relation_markers"
+    implementation_status: "pluggable_expert_module"
+    missing_birth_time_policy: "仅使用当前专家允许的年月日逻辑，并在source_metadata记录精度限制。"
+
+source_rule_bank:
+  source_file: "数字学画像2.xlsx"
+  code_count_observed: 1458
+  domains:
+    - "personality"
+    - "behavior"
+    - "work"
+    - "relationship"
+  candidate_field_order:
+    - "head_number"
+    - "constraint_number"
+    - "main_strengths"
+    - "main_weaknesses"
+    - "main_emotion"
+    - "inner_code"
+    - "subconscious"
+    - "outer_code"
+    - "value_combination"
+    - "talent_number"
+    - "missing_1"
+    - "missing_2"
+    - "missing_3"
+    - "missing_4"
+    - "missing_5"
+    - "missing_6"
+    - "missing_7"
+    - "career_position"
+    - "career_extension_1"
+    - "career_extension_2"
+    - "marriage_position"
+    - "marriage_extension_1"
+    - "marriage_extension_2"
+    - "seat_code"
+    - "external_personality"
+    - "internal_personality"
+  source_label_map:
+    head_number: "打头数字"
+    constraint_number: "制约数"
+    main_strengths: "主性格优点"
+    main_weaknesses: "主性格缺点"
+    main_emotion: "主性格情绪"
+    inner_code: "内心码"
+    subconscious: "潜意识"
+    outer_code: "外心码"
+    value_combination: "价值观组合"
+    talent_number: "天赋数"
+    missing_1: "缺1"
+    missing_2: "缺2"
+    missing_3: "缺3"
+    missing_4: "缺4"
+    missing_5: "缺5"
+    missing_6: "缺6"
+    missing_7: "缺7"
+    career_position: "事业位"
+    career_extension_1: "事业延伸（原第1列）"
+    career_extension_2: "事业延伸（原第2列）"
+    marriage_position: "婚姻位"
+    marriage_extension_1: "婚姻延伸（原第1列）"
+    marriage_extension_2: "婚姻延伸（原第2列）"
+    seat_code: "坐镇码"
+    external_personality: "对外性格"
+    internal_personality: "对内性格"
+  raw_weights:
+    personality:
+      total: 114
+      values:
+        head_number: 15
+        constraint_number: 5
+        main_strengths: 10
+        main_weaknesses: 10
+        main_emotion: 5
+        inner_code: 3
+        subconscious: 5
+        outer_code: 3
+        value_combination: 2
+        talent_number: 10
+        missing_1: 2
+        missing_2: 2
+        missing_3: 2
+        missing_4: 2
+        missing_5: 2
+        missing_6: 2
+        missing_7: 2
+        career_position: 5
+        career_extension_1: 2
+        career_extension_2: 2
+        marriage_position: 5
+        marriage_extension_1: 2
+        marriage_extension_2: 2
+        seat_code: 10
+        external_personality: 2
+        internal_personality: 2
+    behavior:
+      total: 115
+      values:
+        head_number: 20
+        constraint_number: 2
+        main_strengths: 3
+        main_weaknesses: 5
+        main_emotion: 7
+        inner_code: 5
+        subconscious: 5
+        outer_code: 5
+        value_combination: 3
+        talent_number: 5
+        missing_1: 2
+        missing_2: 2
+        missing_3: 2
+        missing_4: 2
+        missing_5: 2
+        missing_6: 2
+        missing_7: 2
+        career_position: 10
+        career_extension_1: 5
+        career_extension_2: 5
+        marriage_position: 2
+        marriage_extension_1: 1
+        marriage_extension_2: 1
+        seat_code: 10
+        external_personality: 5
+        internal_personality: 2
+    work:
+      total: 116
+      values:
+        head_number: 25
+        constraint_number: 2
+        main_strengths: 10
+        main_weaknesses: 5
+        main_emotion: 5
+        inner_code: 5
+        subconscious: 0
+        outer_code: 5
+        value_combination: 3
+        talent_number: 5
+        missing_1: 2
+        missing_2: 2
+        missing_3: 2
+        missing_4: 2
+        missing_5: 2
+        missing_6: 2
+        missing_7: 2
+        career_position: 10
+        career_extension_1: 5
+        career_extension_2: 5
+        marriage_position: 0
+        marriage_extension_1: 0
+        marriage_extension_2: 0
+        seat_code: 10
+        external_personality: 5
+        internal_personality: 2
+    relationship:
+      total: 118
+      values:
+        head_number: 15
+        constraint_number: 2
+        main_strengths: 4
+        main_weaknesses: 6
+        main_emotion: 10
+        inner_code: 10
+        subconscious: 5
+        outer_code: 3
+        value_combination: 2
+        talent_number: 10
+        missing_1: 2
+        missing_2: 2
+        missing_3: 2
+        missing_4: 2
+        missing_5: 2
+        missing_6: 2
+        missing_7: 2
+        career_position: 0
+        career_extension_1: 0
+        career_extension_2: 0
+        marriage_position: 10
+        marriage_extension_1: 5
+        marriage_extension_2: 5
+        seat_code: 10
+        external_personality: 2
+        internal_personality: 5
+
+rule_bank_cleaning:
+  reject_fragments_when:
+    - "text is null or blank"
+    - "trim(text) == '42'"
+    - "weight == 0"
+  deduplication_key: "normalize(text)+domain+semantic_scope"
+  duplicate_column_policy: "保留原列序号并重命名为_1/_2，不合并来源。"
+  final_summary_policy: >-
+    四个领域的最终画像摘要列不得作为运行依赖。原文件仅编码1111有完整摘要，其他大量为空。
+  preserved_metadata:
+    - "source_sheet"
+    - "source_row"
+    - "source_column"
+    - "raw_weight"
+    - "normalized_weight"
+    - "rule_pack_version"
+
+semantic_signal_extraction:
+  output_shape:
+    signal_id: "string"
+    polarity: "-1|0|1"
+    strength: "0..1"
+    scope: "trait|behavior|language|relationship|work|emotion"
+    source_fragment_ref: "string"
+    rationale: "string"
+  requirements:
+    - "必须识别否定、转折、条件、频率和内外差异。"
+    - "同一文本可以产生多个信号，但总影响受source weight约束。"
+    - "无法稳定映射的文本只存candidate_evidence，不改画像。"
+  generalized_signal_dictionary:
+    social_energy_high:
+      cues: ["开朗", "健谈", "爱社交", "爱热闹", "人缘好", "需要人群", "主动表达"]
+      effects: { extroversion: 1 }
+    social_energy_low:
+      cues: ["喜欢独处", "慢热", "话不多", "社交后疲惫", "需要独立空间", "内敛"]
+      effects: { extroversion: -1 }
+    warmth_high:
+      cues: ["温柔", "体贴", "照顾", "愿意倾听", "热心", "让人放松", "重陪伴"]
+      effects: { social_warmth: 1, empathy: 1 }
+    warmth_low:
+      cues: ["冷淡", "疏离", "不体贴", "保持距离", "不愿回应情绪"]
+      effects: { social_warmth: -1 }
+    assertive_high:
+      cues: ["主导", "领导", "拍板", "敢争取", "果断", "直接表达立场"]
+      effects: { assertiveness: 1, confidence: 1 }
+    assertive_low:
+      cues: ["犹豫", "等别人决定", "不敢争取", "回避表态", "优柔寡断"]
+      effects: { assertiveness: -1, confidence: -1 }
+    impulse_high:
+      cues: ["冲动", "想到就做", "爆发", "任性", "说话不过滤", "行动急促"]
+      effects: { impulsivity: 1 }
+    impulse_low:
+      cues: ["谨慎", "反复思量", "克制", "小心求证", "行动前检查"]
+      effects: { impulsivity: -1, depth_of_thought: 1 }
+    openness_high:
+      cues: ["新鲜", "探索", "可能性", "自由", "变化", "不喜欢一成不变"]
+      effects: { openness: 1, adaptability: 1 }
+    openness_low:
+      cues: ["熟悉方法", "按经验", "稳定", "确定性", "讨厌改变"]
+      effects: { openness: -1, structure_pref: 1 }
+    creativity_high:
+      cues: ["创造", "创意", "点子", "策划", "联想", "破旧立新", "重新定义"]
+      effects: { creativity: 1, openness: 1 }
+    creativity_low:
+      cues: ["缺少创意", "沿用模板", "不擅长想新办法", "照已有方法"]
+      effects: { creativity: -1 }
+    depth_high:
+      cues: ["分析", "研究", "求证", "反复推演", "追问原因", "考虑长期"]
+      effects: { depth_of_thought: 1, thinking_ratio: 1 }
+    depth_low:
+      cues: ["不深入分析", "直接相信结论", "很快下判断", "不想太多"]
+      effects: { depth_of_thought: -1 }
+    logic_high:
+      cues: ["逻辑", "数据", "事实", "利弊", "权威依据", "可验证"]
+      effects: { thinking_ratio: 1 }
+    feeling_high:
+      cues: ["感性", "凭感觉", "价值观", "在意感受", "关系和谐优先"]
+      effects: { thinking_ratio: -1, empathy: 1 }
+    empathy_high:
+      cues: ["共情", "理解感受", "察觉情绪", "先倾听", "安慰", "愿意迁就"]
+      effects: { empathy: 1, social_warmth: 1 }
+    empathy_low:
+      cues: ["不擅长安慰", "只给方案", "忽略感受", "不理解情绪"]
+      effects: { empathy: -1, thinking_ratio: 1 }
+    risk_high:
+      cues: ["冒险", "试错", "闯劲", "不怕失败", "先试再说", "挑战"]
+      effects: { risk_tolerance: 1, confidence: 1 }
+    risk_low:
+      cues: ["规避风险", "没有把握不行动", "偏稳定", "担心损失", "充分验证"]
+      effects: { risk_tolerance: -1, structure_pref: 1 }
+    structure_high:
+      cues: ["计划", "流程", "规则", "清单", "条理", "边界", "按步骤"]
+      effects: { structure_pref: 1, discipline: 1 }
+    structure_low:
+      cues: ["讨厌计划", "随性", "即兴", "不受约束", "跳步", "灵感驱动"]
+      effects: { structure_pref: -1, adaptability: 1 }
+    discipline_high:
+      cues: ["自律", "责任", "可靠", "按时", "完整", "自我要求高"]
+      effects: { discipline: 1, persistence: 1 }
+    discipline_low:
+      cues: ["拖延", "依赖催促", "缺少监督就不做", "执行弱", "靠截止日期"]
+      effects: { discipline: -1 }
+    adaptability_high:
+      cues: ["灵活", "变通", "应变", "换方案", "随遇而安", "快速恢复"]
+      effects: { adaptability: 1 }
+    adaptability_low:
+      cues: ["变化需要消化", "抗拒变化", "僵化", "临时变动会焦虑"]
+      effects: { adaptability: -1, structure_pref: 1 }
+    persistence_high:
+      cues: ["坚持", "死磕", "长期投入", "持续跟进", "越挫越勇", "说到做到"]
+      effects: { persistence: 1, discipline: 1 }
+    persistence_low:
+      cues: ["三分钟热度", "半途而废", "容易分心", "开头热闹结尾消失", "遗忘承诺"]
+      effects: { persistence: -1, discipline: -1 }
+    confidence_high:
+      cues: ["自信", "敢说敢做", "不怕质疑", "错了再改", "相信自己"]
+      effects: { confidence: 1, assertiveness: 1 }
+    confidence_low:
+      cues: ["自我怀疑", "需要肯定", "担心做不好", "过度自责", "不敢表现"]
+      effects: { confidence: -1 }
+    optimism_high:
+      cues: ["乐观", "相信转机", "明天会更好", "快速翻篇", "努力会有回报"]
+      effects: { optimism: 1 }
+    optimism_low:
+      cues: ["悲观", "预想最坏", "沮丧", "觉得没有办法", "长期消极"]
+      effects: { optimism: -1 }
+    relationship_investment_high:
+      cues: ["重视关系", "陪伴", "主动表达", "浪漫", "认真投入", "愿意付出"]
+      effects: { romantic_orientation: 1, social_warmth: 1 }
+    relationship_investment_low:
+      cues: ["低关系投入", "不想被束缚", "保持距离", "更重独立", "不愿付出精力"]
+      effects: { romantic_orientation: -1 }
+
+dimension_aggregation:
+  baseline: 0.5
+  formula: >-
+    raw_value = 0.5 + sum(signal.polarity * signal.strength *
+    normalized_source_weight * mapping_strength * data_quality)
+  cold_start_default_clip: [0.15, 0.85]
+  single_fragment_max_absolute_effect: 0.06
+  same_text_total_effect_cap: 0.10
+  conflict_handling:
+    rule: "正反证据都保留；使用净影响更新value，使用冲突比例降低confidence。"
+    conflict_ratio: "min(positive_weight,negative_weight)/max(total_weight,epsilon)"
+  confidence:
+    base_reliability: 0.35
+    maximum: 0.45
+    formula: "min(maximum, base_reliability * coverage * consistency * data_quality)"
+    rule: "value与confidence严格分离。"
+
+derived_profile_generation:
+  mbti_dimensions:
+    ei: "core_traits.extroversion"
+    sn: "0.75*openness + 0.25*creativity"
+    tf: "core_traits.thinking_ratio"
+    jp: "0.75*structure_pref + 0.25*discipline"
+    type_label_thresholds:
+      low: 0.45
+      high: 0.55
+      middle: "X or weak tendency"
+  behavior_style:
+    generation_mode: "scenario_template_selection_plus_parameter_grounding"
+    coverage_requirement: "必须生成01 schema中的18个场景。"
+    per_scenario_algorithm:
+      - "读取该场景default_drivers。"
+      - "选取置信度最高且偏离0.5最大的1至3个driver。"
+      - "根据driver高/中/低区间选择专家模板。"
+      - "把字段、值、置信度写入parameter_refs。"
+      - "若所有driver confidence<0.20，生成中性描述并标记uncertain。"
+  language_style:
+    generation_mode: "trait_to_language_candidate_templates"
+    coverage_requirement:
+      speaking_style: 6
+      humor: 3
+      emotion_expression: 4
+      typical_utterances: 9
+      rare_utterances: 5
+    rules:
+      - "冷启动生成项origin必须是derived，不得伪称用户实际说过。"
+      - "举例只表示表达倾向，不写入用户记忆。"
+      - "对话中观察到真实语言后，用03规则逐步替换derived项。"
+  portrait:
+    coverage_requirement: ["essence", "strengths", "weaknesses", "core_tension", "suitable_roles"]
+    algorithm:
+      - "按abs(value-0.5)*confidence对17维排序。"
+      - "essence使用区分度最高的3至4维。"
+      - "strengths从高值及其正向场景表现生成。"
+      - "weaknesses从低值或极端高值的代价生成，使用非评判措辞。"
+      - "core_tension只能从两个都有依据且方向构成张力的维度生成。"
+      - "suitable_roles只描述互动角色，不做职业或人生决定。"
+
+output_requirements:
+  required_paths:
+    - "identity"
+    - "birth_analysis"
+    - "mbti_dimensions.ei"
+    - "mbti_dimensions.sn"
+    - "mbti_dimensions.tf"
+    - "mbti_dimensions.jp"
+    - "mbti_dimensions.type_label"
+    - "core_traits.energy_mode"
+    - "core_traits.cognition_mode"
+    - "core_traits.decision_mode"
+    - "core_traits.action_mode"
+    - "core_traits.self_perception"
+    - "core_traits.relationship_mode"
+    - "behavior_style.task_style"
+    - "behavior_style.relationship_style"
+    - "behavior_style.inner_state_style"
+    - "language_style.speaking_style"
+    - "language_style.humor"
+    - "language_style.emotion_expression"
+    - "language_style.typical_utterances"
+    - "language_style.rare_utterances"
+    - "portrait.essence"
+    - "portrait.strengths"
+    - "portrait.weaknesses"
+    - "portrait.core_tension"
+    - "portrait.suitable_roles"
+  mandatory_metadata:
+    - "schema_version"
+    - "cold_start_rule_pack_version"
+    - "source_fragment_refs"
+    - "per_field_confidence"
+    - "warnings"
+
+golden_cases:
+  - id: "GOLDEN-1998-12-06"
+    birth_date: "1998-12-06"
+    numerology_code: "6318"
+    target_profile_source: "1998年12月6日_机器人性格设定.xlsx"
+    target_mbti: "ISTJ"
+    known_conflict: "3人-数字学标签.docx给出ENFJ/INFJ/ENFP候选，与完整画像冲突。"
+  - id: "GOLDEN-1989-10-15"
+    birth_date: "1989-10-15"
+    numerology_code: "6118"
+    target_profile_source: "1989年10月15日_机器人性格设定.xlsx"
+    target_mbti: "ENTP"
+    known_conflict: "3人-数字学标签.docx给出INTJ/INTP/ENTJ候选，与完整画像冲突。"
+  - id: "GOLDEN-1988-08-09"
+    birth_date: "1988-08-09"
+    numerology_code: "9817"
+    target_profile_source: "1988年8月9日_机器人性格设定.xlsx"
+    target_mbti: "ENFP"
+    known_conflict: "3人-数字学标签.docx给出ENTJ/ESTJ/INTJ候选，与完整画像冲突。"
+
+expert_maintenance_contract:
+  expert_editable:
+    - "feature_calculators的专家算法配置"
+    - "semantic_signal_dictionary的cues、effects和mapping_strength"
+    - "dimension_aggregation中的步长、裁剪和置信度参数"
+    - "18个场景的模板库"
+    - "语言风格候选模板库"
+    - "人物画像生成模板与禁用措辞"
+  engineering_owned:
+    - "YAML schema校验"
+    - "字段白名单和类型范围"
+    - "权重归一化"
+    - "去重、占位值清洗、幂等、版本、审计"
+    - "规则包编译、测试、发布和回滚"
+  publication_gates:
+    - "所有规则ID唯一"
+    - "所有effect目标都存在于01 schema的17维"
+    - "四领域权重合计与原始材料一致"
+    - "三人结构回归100%"
+    - "无确定性健康/财富/婚姻/命运断言"
