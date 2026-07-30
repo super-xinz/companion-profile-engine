@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: profile_engine
+      POSTGRES_USER: profile_engine
+      POSTGRES_PASSWORD: local-only-change-me
+    volumes:
+      - profile_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U profile_engine"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    command: ["sh", "-c", "alembic upgrade head && profile-engine"]
+    ports:
+      - "8000:8000"
+    environment:
+      PROFILE_DATABASE_URL: postgresql+psycopg://profile_engine:local-only-change-me@postgres/profile_engine
+      PROFILE_API_KEY: local-development-key
+      PROFILE_RULE_SOURCE_DIR: /app/rules
+      PROFILE_ENVIRONMENT: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  profile_db:

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "companion-profile-engine"
+version = "0.2.0"
+description = "Auditable human profile state machine for companion robots"
+requires-python = ">=3.9"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "SQLAlchemy>=2.0,<3",
+  "PyYAML>=6.0,<7",
+  "pydantic-settings>=2.5,<3",
+  "psycopg[binary]>=3.2,<4",
+  "eval-type-backport>=0.2,<1; python_version<'3.10'",
+  "alembic>=1.14,<2",
+  "openpyxl>=3.1,<4",
+  "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+profile-engine = "profile_engine.main:run"
+profile-rules = "profile_engine.rule_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+profile_engine = ["static/*.html", "static/*.js", "static/*.css"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
