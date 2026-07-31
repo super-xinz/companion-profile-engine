@@ -77,9 +77,18 @@ def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
     if not settings.qwen_api_key:
         return _fallback_reply(text, hints), "fallback-v1"
     portrait = profile.get("portrait", {})
+    digital_code = profile.get("digital_code_profile", {})
     internal_context = {
         "reply_hints": hints,
         "portrait_essence": portrait.get("essence", {}).get("content"),
+        "digital_code_profile": {
+            "code": digital_code.get("code"),
+            "confidence": digital_code.get("confidence"),
+            "domain_summaries": {
+                key: value.get("summary")
+                for key, value in digital_code.get("domains", {}).items()
+            },
+        } if digital_code.get("status") == "derived" else None,
         "overall_confidence": profile.get("meta", {}).get("overall_confidence"),
         "current_state": profile.get("runtime", {}).get("current_state", {}),
         "interaction_preferences": profile.get("runtime", {}).get("interaction_preferences", {}),

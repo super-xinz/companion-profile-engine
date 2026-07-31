@@ -1,4 +1,4 @@
-schema_version: "2.1.0"
+schema_version: "2.2.0"
 document_type: "canonical_human_profile_schema"
 language: "zh-CN"
 
@@ -105,9 +105,25 @@ canonical_profile:
           source_text: { type: ["string", "null"] }
       numerology_code:
         type: ["string", "null"]
-        pattern: "^[0-9]{4}$"
-        source_alignment: "3人-数字学标签.docx"
-        note: "通用计算公式尚需专家补齐；不能仅凭三个样例反推并宣称通用。"
+        pattern: "^[1-9]{4}$"
+        source_alignment: "数字学画像2.xlsx"
+        note: "日、月、年份前两位、年份后两位分别归约到1至9；当前覆盖1900至2099年。"
+
+  digital_code_profile:
+    source_alignment: "数字学画像2.xlsx / 性格、行为、做事工作、关系情感、比例"
+    role: "low_confidence_birth_derived_model"
+    update_mode: "recompute_when_birth_fact_changes"
+    fields:
+      status: { type: "string", enum: ["unassigned", "derived"] }
+      code: { type: ["string", "null"], pattern: "^[1-9]{4}$" }
+      algorithm_version: { type: "string" }
+      confidence: "confidence"
+      domains:
+        type: "object"
+        required: [personality, behavior, work, relationship]
+        description: "每个领域保存综合摘要、摘要覆盖权重和全部非零加权成分。"
+      provenance: { type: "object" }
+      maintenance_note: { type: "string" }
 
   mbti_dimensions:
     source_alignment: "性格总览 / 一、MBTI四维度量化"

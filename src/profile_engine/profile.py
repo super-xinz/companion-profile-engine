@@ -4,16 +4,11 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
+from .digital_code import calculate_digital_code, empty_digital_code_profile
 from .enneagram import build_enneagram_profile
 from .rule_compiler import scenario_keys, trait_keys
 from .template_people import TEMPLATE_BY_BIRTH_DATE, template_person_for_birth_date
 
-
-GOLDEN_CODES = {
-    birth_date: (person.numerology_code, person.mbti)
-    for birth_date, person in TEMPLATE_BY_BIRTH_DATE.items()
-    if person.numerology_code
-}
 
 # Exact 17-dimension values transcribed from the supplied complete-profile workbooks.
 # They remain low-confidence display fixtures until experts confirm them as golden truth.
@@ -33,16 +28,12 @@ TRAIT_NAMES = {
 
 
 class BirthFeatureCalculator:
-    """Extension point. The source material only authorizes explicit template mappings."""
+    """Birthday feature adapter kept for compatibility with the profile builder."""
 
-    algorithm_version = "template-mappings-only-v2"
+    algorithm_version = "birth-groups-digital-root-v1"
 
     def calculate(self, birth_date: str) -> tuple[str | None, list[str]]:
-        if birth_date in GOLDEN_CODES:
-            return GOLDEN_CODES[birth_date][0], []
-        if template_person_for_birth_date(birth_date):
-            return None, ["已匹配完整画像资料；资料未提供数字学编码，因此不执行数字学规则库先验。"]
-        return None, ["专家尚未提供任意生日到四位数字学编码的通用公式；已生成中性低置信度画像。"]
+        return calculate_digital_code(birth_date)
 
 
 def _entry(value: float = 0.5, confidence: float = 0.1, evidence_refs: list[str] | None = None) -> dict:
@@ -183,11 +174,12 @@ def build_initial_profile(
     rules: dict,
     evidence_ids: dict[str, list[str]],
     enneagram_identity: dict[str, Any] | None = None,
+    trait_priors: dict[str, float] | None = None,
 ) -> tuple[dict, list[str]]:
     schema = rules["schema"]
     calculator = BirthFeatureCalculator()
     code, warnings = calculator.calculate(birth_date) if birth_date else (None, ["未提供生日，已生成中性画像。"])
-    overrides = _golden_trait_overrides(birth_date)
+    overrides = {**(trait_priors or {}), **_golden_trait_overrides(birth_date)}
     categories = schema["canonical_profile"]["core_traits"]["categories"]
     core_traits = {}
     for category_key, category in categories.items():
@@ -203,6 +195,7 @@ def build_initial_profile(
                            "relation_markers": {"combinations": 0, "self_punishments": 0, "other_punishments": 0, "clashes": 0, "harms": 0, "source_text": None},
                            "numerology_code": code, "algorithm_version": calculator.algorithm_version},
         "core_traits": core_traits,
+        "digital_code_profile": empty_digital_code_profile(),
         "enneagram_profile": build_enneagram_profile(enneagram_identity, rules["enneagram"]),
         "runtime": {"interaction_preferences": {}, "current_state": {}, "memories": []},
         "meta": {"profile_version": 1, "schema_version": schema["schema_version"], "rule_pack_versions": {},

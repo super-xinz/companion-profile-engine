@@ -11,12 +11,14 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
+from .digital_code import (aggregate_trait_priors, build_digital_code_profile,
+                           empty_digital_code_profile)
 from .enneagram import (build_enneagram_profile, empty_enneagram_profile,
                          resolve_interaction_strategy)
 from .extractor import get_semantic_extractor
 from .models import (AuditLog, CurrentState, ManualOverride, Memory, ProfileEvidence,
                      ProfileVersion, RulePack, RuntimePreference, User)
-from .profile import (GOLDEN_CODES, GOLDEN_TRAITS, TRAIT_NAMES, BirthFeatureCalculator,
+from .profile import (GOLDEN_TRAITS, TRAIT_NAMES, BirthFeatureCalculator,
                       build_initial_profile, clone_profile, find_trait, flattened_traits,
                       rebuild_derived, recalculate_meta)
 from .rule_compiler import CompiledRulePack
@@ -80,6 +82,23 @@ def _audit(db: Session, req_id: str, tenant_id: str, action: str, user: User | N
                     idempotency_key=idem_key, before=before, after=after, evidence_refs=evidence_refs or [], rule_ids=rule_ids or []))
 
 
+def _digital_code_context(birth_date: str | None, pack: RulePack) -> tuple[str | None, list[dict], dict, dict[str, float]]:
+    if not birth_date:
+        return None, [], empty_digital_code_profile(), {}
+    code, _ = BirthFeatureCalculator().calculate(birth_date)
+    if not code:
+        return None, [], empty_digital_code_profile(), {}
+    source_dir = get_settings().rule_source_dir
+    if not source_dir.is_absolute():
+        source_dir = (Path.cwd() / source_dir).resolve()
+    fragments = fragments_for_code(str(source_dir.parent / "数字学画像2.xlsx"), code)
+    signals = extract_signals(fragments, pack.canonical_json["cold_start"])
+    source_sha = pack.canonical_json.get("source_rule_bank", {}).get("sha256")
+    model = build_digital_code_profile(code, fragments, source_sha)
+    priors = aggregate_trait_priors(signals, pack.canonical_json["cold_start"])
+    return code, signals, model, priors
+
+
 def ensure_rule_pack(db: Session, pack: CompiledRulePack) -> RulePack:
     existing = db.scalar(select(RulePack).where(RulePack.sha256 == pack.sha256))
     if existing:
@@ -137,19 +156,10 @@ def init_profile(db: Session, tenant_id: str, body: ProfileInitRequest, pack: Ru
         db.add(enneagram_evidence)
         db.flush()
         enneagram_evidence_id = enneagram_evidence.id
-    birth_template = (
-        template_person_for_birth_date(body.birth_date.isoformat())
-        if body.birth_date and body.consent.sensitive_inference
-        else None
-    )
-    if birth_template and birth_template.numerology_code:
-        birth_key = body.birth_date.isoformat()
-        code = birth_template.numerology_code
-        source_dir = get_settings().rule_source_dir
-        if not source_dir.is_absolute():
-            source_dir = (Path.cwd() / source_dir).resolve()
-        fragments = fragments_for_code(str(source_dir.parent / "数字学画像2.xlsx"), code)
-        signals = extract_signals(fragments, pack.canonical_json["cold_start"])
+    effective_birth = body.birth_date.isoformat() if body.birth_date and body.consent.sensitive_inference else None
+    code, signals, digital_code_profile, trait_priors = _digital_code_context(effective_birth, pack)
+    if code:
+        birth_key = effective_birth
         trait_paths = {key: f"core_traits.{category_key}.{key}"
             for category_key, category in pack.canonical_json["schema"]["canonical_profile"]["core_traits"]["categories"].items()
             for key in category["fields"]}
@@ -176,7 +186,6 @@ def init_profile(db: Session, tenant_id: str, body: ProfileInitRequest, pack: Ru
                 reason="黄金样例结构校准；候选文案未提供可稳定匹配信号")
             db.add(evidence); db.flush(); evidence_ids[trait] = [evidence.id]
 
-    effective_birth = body.birth_date.isoformat() if body.birth_date and body.consent.sensitive_inference else None
     profile, warnings = build_initial_profile(
         user.id,
         body.display_name,
@@ -185,7 +194,9 @@ def init_profile(db: Session, tenant_id: str, body: ProfileInitRequest, pack: Ru
         pack.canonical_json,
         evidence_ids,
         body.enneagram.model_dump() if body.enneagram else None,
+        trait_priors,
     )
+    profile["digital_code_profile"] = digital_code_profile
     if enneagram_evidence_id:
         profile["enneagram_profile"]["provenance"].append(enneagram_evidence_id)
     if effective_birth:
@@ -231,6 +242,15 @@ def get_profile(db: Session, tenant_id: str, tenant_user_id: str) -> dict:
     version = current_version(db, user)
     profile = clone_profile(version.snapshot)
     profile.setdefault("enneagram_profile", empty_enneagram_profile())
+    if "digital_code_profile" not in profile:
+        pack = db.scalar(select(RulePack).where(
+            RulePack.status == "published"
+        ).order_by(desc(RulePack.published_at)).limit(1))
+        birth_date = profile.get("identity", {}).get("birth_date") if user.sensitive_inference_consent else None
+        profile["digital_code_profile"] = (
+            _digital_code_context(birth_date, pack)[2]
+            if pack else empty_digital_code_profile()
+        )
     now = datetime.now(timezone.utc)
     active_states = db.scalars(select(CurrentState).where(CurrentState.user_id == user.id, CurrentState.expires_at > now)).all()
     preferences = db.scalars(select(RuntimePreference).where(RuntimePreference.user_id == user.id)).all()
@@ -613,7 +633,8 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
     version = current_version(db, user)
     _check_version(version, body.expected_profile_version)
     if body.target_path.startswith(
-        ("mbti_dimensions", "behavior_style", "language_style", "portrait", "enneagram_profile", "meta")
+        ("mbti_dimensions", "behavior_style", "language_style", "portrait", "digital_code_profile",
+         "enneagram_profile", "meta")
     ):
         raise ValueError("派生字段不可直接更正；请更正底层事实或核心维度")
     before = clone_profile(version.snapshot)
@@ -643,21 +664,35 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
         for evidence in db.scalars(select(ProfileEvidence).where(ProfileEvidence.user_id == user.id,
                 ProfileEvidence.source_type == "cold_start_prior", ProfileEvidence.invalidated.is_(False))):
             evidence.invalidated = True; evidence.invalidated_at = datetime.now(timezone.utc); invalidated.append(evidence.id)
+        birth_key = corrected_date.isoformat()
+        code, signals, digital_code_profile, trait_priors = _digital_code_context(birth_key, pack)
+        signals_by_trait: dict[str, list[dict]] = {}
+        for signal in signals:
+            signals_by_trait.setdefault(signal["target"], []).append(signal)
         for category_key, category in profile["core_traits"].items():
             for trait_key, entry in category.items():
                 entry["evidence_refs"] = [ref for ref in entry["evidence_refs"] if ref not in invalidated]
                 if not entry["evidence_refs"]:
-                    entry.update(value=GOLDEN_TRAITS.get(corrected_date.isoformat(), {}).get(trait_key, 0.5),
-                                 confidence=0.35 if corrected_date.isoformat() in GOLDEN_TRAITS else 0.1)
-                    if corrected_date.isoformat() in GOLDEN_TRAITS:
-                        evidence = ProfileEvidence(user_id=user.id, source_type="cold_start_prior", target_path=f"core_traits.{category_key}.{trait_key}",
-                            direction=0, base_delta=0, impact=0.35, factors={"reliability": 0.35, "corrected_birth_fact": True},
-                            rule_id=f"COLD-BIRTH-CORRECTION-{trait_key}", reason="更正生日后重算黄金样例低置信度先验")
+                    value = GOLDEN_TRAITS.get(birth_key, {}).get(trait_key, trait_priors.get(trait_key, 0.5))
+                    has_prior = trait_key in GOLDEN_TRAITS.get(birth_key, {}) or trait_key in trait_priors
+                    entry.update(value=value, confidence=0.35 if has_prior else 0.1)
+                    if has_prior:
+                        evidence = ProfileEvidence(
+                            user_id=user.id, source_type="cold_start_prior",
+                            target_path=f"core_traits.{category_key}.{trait_key}",
+                            direction=1 if value > .5 else (-1 if value < .5 else 0),
+                            base_delta=abs(value - .5), impact=.35,
+                            factors={"reliability": .35, "corrected_birth_fact": True,
+                                     "signal_count": len(signals_by_trait.get(trait_key, []))},
+                            rule_id=f"COLD-BIRTH-CORRECTION-{trait_key}",
+                            reason="更正生日后重算数字密码低置信度先验",
+                        )
                         db.add(evidence); db.flush(); entry["evidence_refs"].append(evidence.id); evidence_ids.append(evidence.id)
         user.birth_date = corrected_date
         parent[key] = corrected_date.isoformat()
-        code, warnings = BirthFeatureCalculator().calculate(corrected_date.isoformat())
+        _, warnings = BirthFeatureCalculator().calculate(birth_key)
         profile["birth_analysis"]["numerology_code"] = code
+        profile["digital_code_profile"] = digital_code_profile
         profile["meta"]["warnings"] = warnings
         derived = rebuild_derived(profile, pack.canonical_json["schema"])
         corrected_template = template_person_for_birth_date(corrected_date.isoformat())
@@ -825,6 +860,7 @@ def forget_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Forge
                 if any(ref in affected for ref in entry["evidence_refs"]):
                     entry.update(value=0.5, confidence=0.1, evidence_refs=[r for r in entry["evidence_refs"] if r not in affected])
         profile["birth_analysis"]["numerology_code"] = None
+        profile["digital_code_profile"] = empty_digital_code_profile()
         rebuild_derived(profile, pack.canonical_json["schema"])
     elif body.scope == "enneagram":
         for item in db.scalars(select(ProfileEvidence).where(
@@ -843,6 +879,7 @@ def forget_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Forge
         for item in db.scalars(select(Memory).where(Memory.user_id == user.id, Memory.active.is_(True))):
             item.active = False; affected.append(item.id)
         profile["runtime"] = {"interaction_preferences": {}, "current_state": {}, "memories": []}
+        profile["digital_code_profile"] = empty_digital_code_profile()
         profile["enneagram_profile"] = empty_enneagram_profile()
         profile["meta"]["warnings"] = ["画像推断已关闭，历史证据与记忆已失效。"]
     new_no = version.version_no + 1; profile["meta"]["profile_version"] = new_no; recalculate_meta(profile)
