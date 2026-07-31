@@ -15,10 +15,19 @@ def test_multi_person_profile_and_rule_workspaces():
         with TestClient(app) as client:
             boot = client.post("/demo/api/workspace/bootstrap", headers=headers)
             assert boot.status_code == 200, boot.text
-            assert len(boot.json()["people"]) >= 3
+            template_ids = {
+                "person-1988-08-09", "person-1989-10-15", "person-1989-11-28",
+                "person-1996-03-28", "person-1998-12-06",
+            }
+            assert template_ids <= {person["user_id"] for person in boot.json()["people"]}
 
             created = client.post("/demo/api/people", headers=headers, json={
                 "display_name": "测试人物", "birth_date": None, "notes": "隔离测试",
+                "enneagram": {
+                    "core_type": 7, "wing": 6,
+                    "primary_instinct": "SX", "secondary_instinct": "SO",
+                    "source": "expert_confirmed", "confidence": .95,
+                },
             })
             assert created.status_code == 200, created.text
             person = created.json()["person"]
@@ -27,6 +36,7 @@ def test_multi_person_profile_and_rule_workspaces():
             detail = client.get(f"/demo/api/people/{person['user_id']}", headers=headers)
             assert detail.status_code == 200, detail.text
             assert detail.json()["person"]["conversation_count"] == 1
+            assert detail.json()["profile"]["enneagram_profile"]["identity"]["code"] == "SX/SO｜7w6"
             trait = detail.json()["profile"]["core_traits"]["energy_mode"]["extroversion"]["value"]
             edited = client.post(f"/demo/api/people/{person['user_id']}/manual-edit", headers=headers, json={
                 "expected_profile_version": detail.json()["profile_version"],
@@ -36,6 +46,17 @@ def test_multi_person_profile_and_rule_workspaces():
             })
             assert edited.status_code == 200, edited.text
             assert edited.json()["locked"] is True
+            enneagram = client.post(f"/demo/api/people/{person['user_id']}/enneagram", headers=headers, json={
+                "expected_profile_version": edited.json()["profile_version"],
+                "enneagram": {
+                    "core_type": 8, "wing": 9,
+                    "primary_instinct": "SP", "secondary_instinct": "SX",
+                    "source": "expert_confirmed", "confidence": .95,
+                },
+                "reason": "专家复核九型测评结果",
+            })
+            assert enneagram.status_code == 200, enneagram.text
+            assert enneagram.json()["enneagram_profile"]["identity"]["code"] == "SP/SX｜8w9"
 
             messages = client.get(
                 f"/demo/api/people/{person['user_id']}/conversations/{conversation['conversation_id']}/messages",

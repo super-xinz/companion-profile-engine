@@ -1,6 +1,6 @@
 rule_system_version: "2.0.0-draft"
 document_type: "dialogue_profile_maintenance_system"
-target_schema: "01_profile_schema.yaml@2.0.0"
+target_schema: "01_profile_schema.yaml@2.1.0"
 status: "expert_review_required"
 
 objective: >-
@@ -806,6 +806,43 @@ generalized_examples:
       - "forget birth-derived evidence according to policy"
       - "retain only permitted dialogue evidence"
 
+enneagram_maintenance:
+  ownership: "04_enneagram_interaction_model.yaml"
+  identity_boundary:
+    forbidden_sources:
+      - "MBTI类型"
+      - "生日或数字学"
+      - "单一行为维度"
+      - "单轮或普通对话中的行为表现"
+      - "模型自由分类"
+    accepted_sources:
+      - "用户明确声明"
+      - "已授权外部测评结果"
+      - "专家确认"
+  dialogue_behavior:
+    - "普通对话只能调整17维连续画像、事实、偏好、记忆和短期状态，不能自动写入九型身份。"
+    - "已确认九型身份仅用于生成本轮互动策略，不能替代当前语义理解。"
+    - "用户明确偏好高于九型策略；当前压力和能量状态高于静态人格策略。"
+    - "场景变化只重算场景策略，不改写九型身份和六层长期参数。"
+  update_operation:
+    name: "SET_ENNEAGRAM_IDENTITY"
+    endpoint: "/v1/profiles/{user_id}:set-enneagram"
+    requirements:
+      - "敏感推断授权"
+      - "正确画像版本"
+      - "合法主型、相邻侧翼和不同的第一/第二本能"
+      - "明确来源与变更原因"
+    effects:
+      - "整体替换身份组合"
+      - "重算动机、注意力、表达、状态和互动策略"
+      - "生成画像版本、证据和审计记录"
+  forget_operation:
+    scope: "enneagram"
+    effects:
+      - "失效九型身份证据"
+      - "清空九型身份和派生互动策略"
+      - "保留17维画像、事实、记忆和用户明确偏好"
+
 coverage_manifest:
   direct_or_evidence_update_paths:
     identity_fields: "covered by SET_FACT"
@@ -819,6 +856,7 @@ coverage_manifest:
     all_4_mbti_dimensions_and_label: "derived from core traits"
     all_5_portrait_fields: "derived by portrait_regeneration"
     birth_analysis: "recomputed only when birth facts or expert calculator version changes"
+    enneagram_identity: "explicit input only; derived interaction layers are rebuilt from rule 04"
   source_profile_totals:
     mbti_dimensions: 4
     core_traits: 17

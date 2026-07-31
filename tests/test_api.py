@@ -15,7 +15,14 @@ def idem(value: str) -> dict:
 
 def test_golden_profiles_are_complete():
     with TestClient(app) as client:
-        for birth_date, expected_type, expected_extroversion in (("1998-12-06", "ISTJ", .45), ("1989-10-15", "ENTP", .83), ("1988-08-09", "ENFP", 1.0)):
+        cases = (
+            ("1988-08-09", "ENFP", 1.0),
+            ("1989-10-15", "ENTP", .83),
+            ("1989-11-28", "ENTP", 1.0),
+            ("1996-03-28", "ESFJ", .65),
+            ("1998-12-06", "ISTJ", .45),
+        )
+        for birth_date, expected_type, expected_extroversion in cases:
             user = f"golden-{birth_date}-{uuid.uuid4().hex[:8]}"
             response = client.post("/v1/profiles:init", headers=idem(f"init-{user}"), json={
                 "tenant_user_id": user, "birth_date": birth_date, "timezone": "Asia/Shanghai",
@@ -29,6 +36,11 @@ def test_golden_profiles_are_complete():
             assert sum(len(x) for x in profile["behavior_style"].values()) == 18
             assert len(profile["language_style"]["typical_utterances"]) == 9
             assert len(profile["portrait"]) == 5
+            assert profile["source_profile_document"]["birth_date"] == birth_date
+            assert profile["identity"]["template_person_id"] == f"person-{birth_date}"
+            assert set(profile["source_portrait"]) == {
+                "essence", "strengths", "weaknesses", "core_tension", "suitable_roles",
+            }
             assert profile["meta"]["overall_confidence"] <= 0.45
 
 

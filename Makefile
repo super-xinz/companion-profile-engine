@@ -1,20 +1,23 @@
 .PHONY: install migrate rules test run demo
 
+CONDA_ENV ?= $(CURDIR)/.conda-env
+CONDA_RUN = conda run --no-capture-output -p $(CONDA_ENV)
+
 install:
-	python3 -m venv .venv
-	.venv/bin/pip install -e '.[dev]'
+	conda env update -p $(CONDA_ENV) -f environment.yml --prune
+	$(CONDA_RUN) pip install -e '.[dev]'
 
 migrate:
-	.venv/bin/alembic upgrade head
+	$(CONDA_RUN) alembic upgrade head
 
 rules:
-	.venv/bin/profile-rules --source ./rules
+	$(CONDA_RUN) profile-rules --source ./rules
 
 test:
-	.venv/bin/pytest
+	PROFILE_SEMANTIC_EXTRACTOR=deterministic $(CONDA_RUN) pytest
 
 run:
-	.venv/bin/profile-engine
+	$(CONDA_RUN) profile-engine
 
 demo:
-	.venv/bin/python scripts/demo.py
+	$(CONDA_RUN) python scripts/demo.py

@@ -7,54 +7,21 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+from .template_people import TEMPLATE_BY_BIRTH_DATE, template_person_for_birth_date
 
-SOURCE_FILES = {
-    "1988-08-09": "1988年8月9日_机器人性格设定.xlsx",
-    "1989-10-15": "1989年10月15日_机器人性格设定.xlsx",
-    "1998-12-06": "1998年12月6日_机器人性格设定.xlsx",
-}
 
+SOURCE_FILES = {birth_date: person.source_file for birth_date, person in TEMPLATE_BY_BIRTH_DATE.items()}
 SOURCE_META = {
-    "1988-08-09": {
-        "bazi_text": "戊辰 庚申 丙申",
-        "day_master": "丙火",
-        "pattern_name": "偏财格",
-        "strength_label": "身弱",
-        "mbti": "ENFP",
-        "relation_markers": {
-            "combinations": 0, "self_punishments": 0, "other_punishments": 0,
-            "clashes": 0, "harms": 0, "source_text": "无刑冲合害",
-        },
-    },
-    "1989-10-15": {
-        "bazi_text": "己巳 甲戌 戊申",
-        "day_master": "戊土",
-        "pattern_name": "七杀格",
-        "strength_label": "身强",
-        "mbti": "ENTP",
-        "relation_markers": {
-            "combinations": 2, "self_punishments": 0, "other_punishments": 1,
-            "clashes": 0, "harms": 0, "source_text": "合2次 他刑1次",
-        },
-    },
-    "1998-12-06": {
-        "bazi_text": "戊寅 癸亥 丁亥",
-        "day_master": "丁火",
-        "pattern_name": "七杀格",
-        "strength_label": "身弱",
-        "mbti": "ISTJ",
-        "relation_markers": {
-            "combinations": 3, "self_punishments": 1, "other_punishments": 0,
-            "clashes": 0, "harms": 0, "source_text": "合3次 自刑1次",
-        },
-    },
+    birth_date: {**person.birth_analysis, "mbti": person.mbti}
+    for birth_date, person in TEMPLATE_BY_BIRTH_DATE.items()
 }
 
 
 def _source_path(birth_date: str) -> Path | None:
-    filename = SOURCE_FILES.get(birth_date)
-    if not filename:
+    person = template_person_for_birth_date(birth_date)
+    if not person:
         return None
+    filename = person.source_file
     project_root = Path(__file__).resolve().parents[2]
     candidates = [
         project_root / "source_profiles" / filename,
@@ -98,7 +65,7 @@ def apply_source_profile(profile: dict, birth_date: str) -> bool:
     if not document:
         return False
 
-    overview = document["sheets"]["性格总览"]
+    overview = document["sheets"].get("性格总览", [])
     meta = SOURCE_META[birth_date]
     profile["birth_analysis"].update({
         "bazi_text": meta["bazi_text"],
@@ -108,14 +75,23 @@ def apply_source_profile(profile: dict, birth_date: str) -> bool:
         "relation_markers": meta["relation_markers"],
     })
 
-    mbti_keys = ("ei", "sn", "tf", "jp")
-    for key, row in zip(mbti_keys, overview[5:9]):
+    mbti_labels = {"E↔I": "ei", "S↔N": "sn", "T↔F": "tf", "J↔P": "jp"}
+    imported_mbti = set()
+    for row in overview:
+        label = str(row[0] or "").replace(" ", "")
+        key = next((value for prefix, value in mbti_labels.items() if label.startswith(prefix)), None)
+        if not key or len(row) < 5:
+            continue
         profile["mbti_dimensions"][key].update({
             "value": float(row[1]),
             "confidence": 0.45,
             "source_tendency": row[2],
             "source_interpretation": row[4],
         })
+        imported_mbti.add(key)
+    missing_mbti = set(mbti_labels.values()) - imported_mbti
+    if missing_mbti:
+        raise ValueError(f"{document['source_file']} 缺少MBTI维度: {sorted(missing_mbti)}")
     profile["mbti_dimensions"]["type_label"] = meta["mbti"]
 
     trait_lookup = {
@@ -123,7 +99,10 @@ def apply_source_profile(profile: dict, birth_date: str) -> bool:
         for category in profile["core_traits"].values()
         for key, value in category.items()
     }
-    for row in overview[12:29]:
+    imported_traits = set()
+    for row in overview:
+        if len(row) < 6:
+            continue
         match = re.match(r"^([a-z_]+)", str(row[1] or ""))
         if not match or match.group(1) not in trait_lookup:
             continue
@@ -137,25 +116,48 @@ def apply_source_profile(profile: dict, birth_date: str) -> bool:
             "interpretation": interpretation or tendency,
             "origin": "user_supplied_complete_profile",
         })
+        imported_traits.add(key)
+    missing_traits = set(trait_lookup) - imported_traits
+    if missing_traits:
+        raise ValueError(f"{document['source_file']} 缺少核心维度: {sorted(missing_traits)}")
 
-    portrait_rows = document["sheets"]["人物画像"][3:8]
-    portrait_keys = ("essence", "strengths", "weaknesses", "core_tension", "suitable_roles")
-    profile["source_portrait"] = {
+    portrait_labels = {
+        "本质": "essence",
+        "优势": "strengths",
+        "弱点": "weaknesses",
+        "核心矛盾": "core_tension",
+        "适合角色": "suitable_roles",
+        "适合的角色": "suitable_roles",
+    }
+    source_portrait = {}
+    for row in document["sheets"].get("人物画像", []):
+        if len(row) < 2:
+            continue
+        key = portrait_labels.get(str(row[0] or "").strip())
+        if key and row[1]:
+            source_portrait[key] = {
+                "content": row[1],
+                "confidence": 0.45,
+                "origin": "user_supplied_complete_profile",
+            }
+    profile["source_portrait"] = source_portrait
+    missing_portrait = set(portrait_labels.values()) - set(source_portrait)
+    if missing_portrait:
+        raise ValueError(f"{document['source_file']} 缺少人物画像字段: {sorted(missing_portrait)}")
+    profile["portrait"] = {
         key: {
-            "content": row[1],
+            "content": item["content"],
             "confidence": 0.45,
             "origin": "user_supplied_complete_profile",
+            "parameter_refs": [],
         }
-        for key, row in zip(portrait_keys, portrait_rows)
-    }
-    profile["portrait"] = {
-        key: {**value, "parameter_refs": []}
-        for key, value in profile["source_portrait"].items()
+        for key, item in source_portrait.items()
     }
     profile["source_profile_document"] = document
+    profile["identity"]["template_person_id"] = template_person_for_birth_date(birth_date).user_id
     profile["meta"]["warnings"] = [
         warning for warning in profile["meta"].get("warnings", [])
-        if "黄金样例" not in warning
+        if "黄金样例" not in warning and "专家尚未提供任意生日到四位数字学编码" not in warning
     ]
     profile["meta"]["warnings"].append("已完整导入用户提供的原始画像工作簿；后续对话证据将持续校准动态画像。")
     return True

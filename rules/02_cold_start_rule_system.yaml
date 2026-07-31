@@ -1,17 +1,17 @@
-rule_system_version: "2.0.0-draft"
+rule_system_version: "2.0.1-draft"
 document_type: "cold_start_rule_system"
-target_schema: "01_profile_schema.yaml@2.0.0"
+target_schema: "01_profile_schema.yaml@2.1.0"
 status: "expert_review_required"
 
 objective: >-
   在仅有生日、用户授权及少量可选事实时，生成一份结构完整但明确低置信度的真人画像先验。
-  输出必须覆盖原始三人案例的所有画像区域，而不是只返回几个标签。
+  输出必须覆盖原始五人案例的所有画像区域，而不是只返回几个标签。
 
 non_goals:
   - "不证明生日能够科学地决定人格。"
   - "不输出健康、财富、婚姻、命运等确定性预测。"
   - "不把冷启动结果锁定为真实人格。"
-  - "不把《3人-数字学标签》中的MBTI猜测覆盖到三份完整画像上。"
+  - "不把《3人-数字学标签》中的MBTI猜测覆盖到五份完整画像上。"
 
 input_contract:
   required:
@@ -509,6 +509,18 @@ golden_cases:
     target_profile_source: "1988年8月9日_机器人性格设定.xlsx"
     target_mbti: "ENFP"
     known_conflict: "3人-数字学标签.docx给出ENTJ/ESTJ/INTJ候选，与完整画像冲突。"
+  - id: "GOLDEN-1989-11-28"
+    birth_date: "1989-11-28"
+    numerology_code: null
+    target_profile_source: "1989年11月28日_机器人性格设定.xlsx"
+    target_mbti: "ENTP"
+    known_conflict: "完整画像资料未提供数字学编码，不执行数字学规则库先验。"
+  - id: "GOLDEN-1996-03-28"
+    birth_date: "1996-03-28"
+    numerology_code: null
+    target_profile_source: "1996年3月28日_机器人性格设定.xlsx"
+    target_mbti: "ESFJ"
+    known_conflict: "完整画像资料未提供数字学编码，不执行数字学规则库先验。"
 
 expert_maintenance_contract:
   expert_editable:
@@ -528,5 +540,5 @@ expert_maintenance_contract:
     - "所有规则ID唯一"
     - "所有effect目标都存在于01 schema的17维"
     - "四领域权重合计与原始材料一致"
-    - "三人结构回归100%"
+    - "五人结构回归100%"
     - "无确定性健康/财富/婚姻/命运断言"

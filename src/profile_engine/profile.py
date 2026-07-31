@@ -4,30 +4,22 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
+from .enneagram import build_enneagram_profile
 from .rule_compiler import scenario_keys, trait_keys
+from .template_people import TEMPLATE_BY_BIRTH_DATE, template_person_for_birth_date
 
 
 GOLDEN_CODES = {
-    "1998-12-06": ("6318", "ISTJ"),
-    "1989-10-15": ("6118", "ENTP"),
-    "1988-08-09": ("9817", "ENFP"),
+    birth_date: (person.numerology_code, person.mbti)
+    for birth_date, person in TEMPLATE_BY_BIRTH_DATE.items()
+    if person.numerology_code
 }
 
-# Exact 17-dimension values transcribed from the three supplied complete-profile workbooks.
+# Exact 17-dimension values transcribed from the supplied complete-profile workbooks.
 # They remain low-confidence display fixtures until experts confirm them as golden truth.
 GOLDEN_TRAITS = {
-    "1998-12-06": {"extroversion": .45, "social_warmth": .69, "assertiveness": .30, "impulsivity": .26,
-        "openness": .31, "creativity": .49, "depth_of_thought": .58, "thinking_ratio": .56, "empathy": .64,
-        "risk_tolerance": .41, "structure_pref": .68, "discipline": .84, "adaptability": .55, "persistence": .45,
-        "confidence": .31, "optimism": .66, "romantic_orientation": .83},
-    "1989-10-15": {"extroversion": .83, "social_warmth": .54, "assertiveness": .83, "impulsivity": .66,
-        "openness": 1.0, "creativity": .66, "depth_of_thought": .57, "thinking_ratio": .51, "empathy": .51,
-        "risk_tolerance": .66, "structure_pref": .10, "discipline": .39, "adaptability": .70, "persistence": .80,
-        "confidence": .84, "optimism": .49, "romantic_orientation": .71},
-    "1988-08-09": {"extroversion": 1.0, "social_warmth": 1.0, "assertiveness": .40, "impulsivity": .60,
-        "openness": 1.0, "creativity": .52, "depth_of_thought": .50, "thinking_ratio": .31, "empathy": .70,
-        "risk_tolerance": .84, "structure_pref": .18, "discipline": .60, "adaptability": .87, "persistence": .36,
-        "confidence": .47, "optimism": .75, "romantic_orientation": 1.0},
+    birth_date: dict(person.trait_values)
+    for birth_date, person in TEMPLATE_BY_BIRTH_DATE.items()
 }
 
 TRAIT_NAMES = {
@@ -41,13 +33,15 @@ TRAIT_NAMES = {
 
 
 class BirthFeatureCalculator:
-    """Extension point. The source material only authorizes three exact mappings."""
+    """Extension point. The source material only authorizes explicit template mappings."""
 
-    algorithm_version = "golden-mappings-only-v1"
+    algorithm_version = "template-mappings-only-v2"
 
     def calculate(self, birth_date: str) -> tuple[str | None, list[str]]:
         if birth_date in GOLDEN_CODES:
             return GOLDEN_CODES[birth_date][0], []
+        if template_person_for_birth_date(birth_date):
+            return None, ["已匹配完整画像资料；资料未提供数字学编码，因此不执行数字学规则库先验。"]
         return None, ["专家尚未提供任意生日到四位数字学编码的通用公式；已生成中性低置信度画像。"]
 
 
@@ -181,7 +175,15 @@ def derive_portrait(profile: dict) -> dict:
     }
 
 
-def build_initial_profile(user_id: str, display_name: str | None, birth_date: str | None, timezone_name: str | None, rules: dict, evidence_ids: dict[str, list[str]]) -> tuple[dict, list[str]]:
+def build_initial_profile(
+    user_id: str,
+    display_name: str | None,
+    birth_date: str | None,
+    timezone_name: str | None,
+    rules: dict,
+    evidence_ids: dict[str, list[str]],
+    enneagram_identity: dict[str, Any] | None = None,
+) -> tuple[dict, list[str]]:
     schema = rules["schema"]
     calculator = BirthFeatureCalculator()
     code, warnings = calculator.calculate(birth_date) if birth_date else (None, ["未提供生日，已生成中性画像。"])
@@ -201,13 +203,15 @@ def build_initial_profile(user_id: str, display_name: str | None, birth_date: st
                            "relation_markers": {"combinations": 0, "self_punishments": 0, "other_punishments": 0, "clashes": 0, "harms": 0, "source_text": None},
                            "numerology_code": code, "algorithm_version": calculator.algorithm_version},
         "core_traits": core_traits,
+        "enneagram_profile": build_enneagram_profile(enneagram_identity, rules["enneagram"]),
         "runtime": {"interaction_preferences": {}, "current_state": {}, "memories": []},
         "meta": {"profile_version": 1, "schema_version": schema["schema_version"], "rule_pack_versions": {},
                  "overall_confidence": 0.0, "created_at": now, "updated_at": now, "warnings": warnings},
     }
     profile["mbti_dimensions"] = derive_mbti(profile)
-    if birth_date in GOLDEN_CODES:
-        profile["mbti_dimensions"]["type_label"] = GOLDEN_CODES[birth_date][1]
+    template = template_person_for_birth_date(birth_date)
+    if template:
+        profile["mbti_dimensions"]["type_label"] = template.mbti
     profile["behavior_style"] = derive_behavior(profile, schema)
     profile["language_style"] = derive_language(profile, schema)
     profile["portrait"] = derive_portrait(profile)

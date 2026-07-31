@@ -1,4 +1,4 @@
-schema_version: "2.0.0"
+schema_version: "2.1.0"
 document_type: "canonical_human_profile_schema"
 language: "zh-CN"
 
@@ -6,10 +6,12 @@ purpose:
   subject: "与陪伴机器人交互的真人用户"
   definition: >-
     本文件定义机器人在内部维护的“对真人的认识”。机器人自身性格不在本文件中。
-    三份原始案例是同一结构的三个真人画像实例，本结构以它们共同出现的四个工作表为准。
+    五份原始案例是同一结构的五个真人画像实例，本结构以它们共同出现的四个工作表为准。
   source_files:
     - "1988年8月9日_机器人性格设定.xlsx"
     - "1989年10月15日_机器人性格设定.xlsx"
+    - "1989年11月28日_机器人性格设定.xlsx"
+    - "1996年3月28日_机器人性格设定.xlsx"
     - "1998年12月6日_机器人性格设定.xlsx"
   source_sections:
     - "性格总览"
@@ -23,6 +25,8 @@ design_rules:
   - "冷启动只提供低置信度先验；对话证据可以校准或推翻先验。"
   - "短期状态不得直接覆盖长期人格。"
   - "场景行为、语言风格和人物画像是可重建的派生层，不是独立真值。"
+  - "九型人格身份只接受用户、授权测评或专家明确输入；禁止从MBTI、生日、单一行为或普通对话自动分类。"
+  - "九型动机、注意力、表达、状态与互动策略均为可重建派生解释，不得当作独立事实。"
   - "运行时扩展字段与原始案例字段分区，不能混称为原始结构。"
 
 common_types:
@@ -68,7 +72,7 @@ canonical_profile:
         format: "time"
         sensitive: true
         update_mode: "explicit_user_set_or_correct"
-        note: "三份案例未使用时辰；当前允许为空。"
+        note: "五份案例未使用时辰；当前允许为空。"
       timezone:
         type: ["string", "null"]
         update_mode: "explicit_or_device_context"
@@ -80,13 +84,13 @@ canonical_profile:
     fields:
       bazi_text:
         type: ["string", "null"]
-        examples: ["戊辰 庚申 丙申", "己巳 甲戌 戊申", "戊寅 癸亥 丁亥"]
+        examples: ["戊辰 庚申 丙申", "己巳 甲戌 戊申", "己巳 乙亥 壬辰", "丙子 辛卯 甲子", "戊寅 癸亥 丁亥"]
       day_master:
         type: ["string", "null"]
-        examples: ["丙火", "戊土", "丁火"]
+        examples: ["丙火", "戊土", "壬水", "甲木", "丁火"]
       pattern_name:
         type: ["string", "null"]
-        examples: ["偏财格", "七杀格"]
+        examples: ["偏财格", "七杀格", "伤官格", "正官格"]
       strength_label:
         type: ["string", "null"]
         enum: ["身强", "身弱", null]
@@ -248,6 +252,51 @@ canonical_profile:
             low_anchor: "更强调边界、独立和低关系投入。"
             high_anchor: "重视连接、主动表达、愿意投入时间和情绪。"
 
+  enneagram_profile:
+    source_alignment: "飞书文档01-08｜九型人格AI陪伴聊天策略模型"
+    role: "explicit_identity_and_derived_interaction_parameters"
+    mutability: "replace_by_explicit_user_assessment_or_expert_confirmation"
+    inference_policy: "forbid_dialogue_auto_classification"
+    identity_fields:
+      status:
+        type: "enum"
+        values: ["unassigned", "confirmed"]
+      code:
+        type: ["string", "null"]
+        examples: ["SX/SO｜7w6", "SP/SX｜5w4"]
+      core_type:
+        type: ["integer", "null"]
+        minimum: 1
+        maximum: 9
+      wing:
+        type: ["integer", "null"]
+        rule: "仅允许主型相邻类型"
+      primary_instinct:
+        type: ["string", "null"]
+        values: ["SP", "SX", "SO", null]
+      secondary_instinct:
+        type: ["string", "null"]
+        values: ["SP", "SX", "SO", null]
+        rule: "必须与第一本能不同"
+      source:
+        type: ["string", "null"]
+        values: ["user_supplied", "external_assessment", "expert_confirmed", null]
+      confidence:
+        type: "confidence"
+    derived_layers:
+      motivation: ["core_drive", "core_fear", "core_need"]
+      attention: ["focus", "information_processing", "decision_style"]
+      expression: ["persona", "emotion_style", "relationship_style"]
+      state: ["secure_state", "stress_state", "defense"]
+      interaction_strategy: ["communication", "motivation", "conflict", "trust", "companionship"]
+    provenance:
+      required: true
+      description: "引用主型、侧翼、本能规则路径以及明确输入证据。"
+    maintenance:
+      update: "整体替换身份组合、生成新画像版本并记录审计；不得对类型编号做加权平均。"
+      forget: "可单独清除九型身份及其全部派生策略。"
+      priority: "用户明确偏好、人工修正、当前状态和安全规则高于九型策略。"
+
   behavior_style:
     source_alignment: "行为风格"
     role: "derived_scenario_profile_with_optional_direct_evidence"
@@ -404,7 +453,7 @@ canonical_profile:
         generation: "基于优势与场景表现生成互动角色描述；不得替用户做职业决定"
 
 runtime_extensions:
-  source_alignment: "非三份原始案例字段；为陪伴聊天运行所需"
+  source_alignment: "非五份原始案例字段；为陪伴聊天运行所需"
   separation_rule: "不得写入source_profile_contract；API响应中放在runtime命名空间。"
   interaction_preferences:
     fields:
@@ -427,6 +476,7 @@ profile_instance_contract:
     - "birth_analysis"
     - "mbti_dimensions"
     - "core_traits"
+    - "enneagram_profile"
     - "behavior_style"
     - "language_style"
     - "portrait"
@@ -452,7 +502,13 @@ coverage_manifest:
       typical_utterance_contexts: 9
       rare_utterance_target: 5
     portrait_field_count: 5
+    enneagram_core_type_count: 9
+    enneagram_wing_count: 18
+    enneagram_instinct_stack_count: 6
+    enneagram_resolved_combination_count: 54
+    enneagram_scene_count: 10
   rule_ownership:
     cold_start: "02_cold_start_rule_system.yaml"
     dialogue_update: "03_dialogue_profile_maintenance.yaml"
+    enneagram_interaction: "04_enneagram_interaction_model.yaml"
     implementation: "04_development_spec.md"

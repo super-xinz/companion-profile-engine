@@ -20,9 +20,11 @@ from .models import (AuditLog, ChatMessage, Conversation, ManualOverride, Memory
                      ProfileEvidence, ProfileVersion, RulePack, RuleRevision,
                      TeamMember, User)
 from .profile import TRAIT_NAMES, clone_profile, flattened_traits, rebuild_derived, recalculate_meta
-from .schemas import Consent, ProfileInitRequest
+from .schemas import (Consent, EnneagramIdentityInput, ProfileInitRequest,
+                      SetEnneagramRequest)
 from .service import (_audit, _resolve_path, current_version, explain_profile, find_user,
-                      get_profile, init_profile)
+                      get_profile, init_profile, set_enneagram_profile)
+from .template_people import TEMPLATE_PEOPLE
 
 
 router = APIRouter(prefix="/demo/api", tags=["workspaces"])
@@ -39,6 +41,7 @@ ROLE_PERMISSIONS = {
 class PersonCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=128)
     birth_date: date | None = None
+    enneagram: EnneagramIdentityInput | None = None
     notes: str | None = Field(default=None, max_length=1000)
 
 
@@ -53,6 +56,12 @@ class ManualEditRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+class EnneagramEditRequest(BaseModel):
+    expected_profile_version: int = Field(ge=1)
+    enneagram: EnneagramIdentityInput
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class DraftCreate(BaseModel):
     title: str = Field(default="规则优化草稿", min_length=1, max_length=256)
     base_revision_id: str | None = None
@@ -64,12 +73,12 @@ class DraftSave(BaseModel):
 
 
 class RuleDocumentParse(BaseModel):
-    asset: Literal["cold_start", "dialogue", "schema"]
+    asset: Literal["cold_start", "dialogue", "schema", "enneagram"]
     document_text: str = Field(min_length=1, max_length=2_000_000)
 
 
 class RuleDocumentDump(BaseModel):
-    asset: Literal["cold_start", "dialogue", "schema"]
+    asset: Literal["cold_start", "dialogue", "schema", "enneagram"]
     content: dict
 
 
@@ -169,13 +178,9 @@ def _ensure_conversation(db: Session, user: User, external_id: str | None = None
 
 
 def _seed_people(db: Session, tenant_id: str, request: Request) -> None:
-    seeds = [
-        ("person-1988-08-09", "1988年8月9日", "1988-08-09"),
-        ("person-1989-10-15", "1989年10月15日", "1989-10-15"),
-        ("person-1998-12-06", "1998年12月6日", "1998-12-06"),
-    ]
     pack = _current_pack(request, db)
-    for user_id, name, birthday in seeds:
+    for person in TEMPLATE_PEOPLE:
+        user_id, name, birthday = person.user_id, person.display_name, person.birth_date
         exists = db.scalar(select(User).where(User.tenant_id == tenant_id, User.tenant_user_id == user_id))
         if exists:
             continue
@@ -227,7 +232,8 @@ def create_person(body: PersonCreate, request: Request, tenant_id: str = Depends
     response = init_profile(
         db, tenant_id,
         ProfileInitRequest(tenant_user_id=user_id, display_name=body.display_name, birth_date=body.birth_date,
-                           timezone="Asia/Shanghai", consent=Consent(profile=True, sensitive_inference=bool(body.birth_date))),
+                           timezone="Asia/Shanghai", enneagram=body.enneagram,
+                           consent=Consent(profile=True, sensitive_inference=bool(body.birth_date or body.enneagram))),
         _current_pack(request, db), request.state.request_id, f"workspace-create-{user_id}",
     )
     user = find_user(db, tenant_id, user_id)
@@ -331,7 +337,9 @@ def manual_edit(user_id: str, body: ManualEditRequest, request: Request,
     version = current_version(db, user)
     if version.version_no != body.expected_profile_version:
         raise HTTPException(status_code=409, detail=f"画像已更新为 v{version.version_no}，请刷新后重试")
-    if body.target_path.startswith(("mbti_dimensions", "behavior_style", "language_style", "portrait", "meta")):
+    if body.target_path.startswith(
+        ("mbti_dimensions", "behavior_style", "language_style", "portrait", "enneagram_profile", "meta")
+    ):
         raise HTTPException(status_code=422, detail="派生字段不能直接修改，请编辑底层画像维度或事实")
     before = clone_profile(version.snapshot)
     profile = clone_profile(version.snapshot)
@@ -391,15 +399,51 @@ def manual_edit(user_id: str, body: ManualEditRequest, request: Request,
             "after": applied, "locked": True, "actor": actor}
 
 
+@router.post("/people/{user_id}/enneagram")
+def edit_enneagram(
+    user_id: str,
+    body: EnneagramEditRequest,
+    request: Request,
+    tenant_id: str = Depends(demo_auth),
+    x_actor_name: str | None = Header(default=None, alias="X-Actor-Name"),
+    db: Session = Depends(get_db),
+) -> dict:
+    actor = _actor(x_actor_name)
+    _require(db, tenant_id, actor, "profile.edit")
+    response = set_enneagram_profile(
+        db,
+        tenant_id,
+        user_id,
+        SetEnneagramRequest(
+            expected_profile_version=body.expected_profile_version,
+            enneagram=body.enneagram,
+            reason=body.reason,
+        ),
+        _current_pack(request, db),
+        request.state.request_id,
+        f"workspace-enneagram-{uuid.uuid4().hex}",
+    )
+    audit = db.scalar(select(AuditLog).where(AuditLog.request_id == request.state.request_id))
+    if audit:
+        audit.actor = actor
+        db.commit()
+    return {**response, "actor": actor}
+
+
 def _validate_rules(canonical: dict) -> dict:
     errors: list[str] = []
     warnings: list[str] = []
     schema = canonical.get("schema", {})
     cold = canonical.get("cold_start", {})
     dialogue = canonical.get("dialogue", {})
+    enneagram = canonical.get("enneagram", {})
     categories = schema.get("canonical_profile", {}).get("core_traits", {}).get("categories", {})
     traits = [key for category in categories.values() for key in category.get("fields", {})]
     mappings = dialogue.get("trait_mapping_rules", {})
+    target_schema = f"01_profile_schema.yaml@{schema.get('schema_version')}"
+    for name, rules in (("冷启动", cold), ("对话维护", dialogue), ("九型互动", enneagram)):
+        if rules.get("target_schema") != target_schema:
+            errors.append(f"{name}规则目标结构不兼容：{rules.get('target_schema')}")
     if len(traits) != 17 or len(set(traits)) != 17:
         errors.append(f"核心画像维度应为 17 个，当前为 {len(set(traits))} 个")
     missing = sorted(set(traits) - set(mappings))
@@ -431,6 +475,22 @@ def _validate_rules(canonical: dict) -> dict:
         errors.append(f"发现 {len(conflicts)} 个方向冲突的语义线索：{', '.join(conflicts[:5])}")
     if not signals:
         warnings.append("冷启动语义信号为空，生日画像将只保留中性先验")
+    core_types = enneagram.get("core_types", {})
+    wings = enneagram.get("wings", {})
+    stacks = enneagram.get("instinct_stacks", {})
+    scenes = enneagram.get("scene_adaptation", {})
+    if len(core_types) != 9:
+        errors.append(f"九型主型应为 9 个，当前为 {len(core_types)} 个")
+    if len(wings) != 18:
+        errors.append(f"九型侧翼应为 18 个，当前为 {len(wings)} 个")
+    if len(stacks) != 6:
+        errors.append(f"本能叠层应为 6 个，当前为 {len(stacks)} 个")
+    weights = enneagram.get("weights", {})
+    weight_total = sum(float(weights.get(key, 0)) for key in (
+        "core_type", "primary_instinct", "secondary_instinct", "wing", "dynamic_state"
+    ))
+    if abs(weight_total - 1.0) > 1e-9:
+        errors.append("九型参数权重总和必须为 1")
     return {
         "valid": not errors, "errors": errors, "warnings": warnings,
         "checks": {
@@ -438,6 +498,11 @@ def _validate_rules(canonical: dict) -> dict:
             "dialogue_mapping_count": len(mappings),
             "semantic_signal_count": len(signals),
             "conflict_count": len(conflicts),
+            "enneagram_core_type_count": len(core_types),
+            "enneagram_wing_count": len(wings),
+            "enneagram_instinct_stack_count": len(stacks),
+            "enneagram_resolved_combination_count": len(core_types) * len(stacks),
+            "enneagram_scene_count": len(scenes),
         },
     }
 
@@ -450,8 +515,10 @@ def _ensure_rule_revision(db: Session, tenant_id: str, request: Request) -> Rule
     latest = db.scalar(select(RuleRevision).where(
         RuleRevision.tenant_id == tenant_id, RuleRevision.status == "published"
     ).order_by(desc(RuleRevision.revision_no)).limit(1))
-    if latest:
+    if latest and "enneagram" in latest.canonical_json:
         return latest
+    if latest:
+        latest.status = "superseded"
     pack = _current_pack(request, db)
     latest = RuleRevision(
         tenant_id=tenant_id, revision_no=_next_revision_no(db, tenant_id),
@@ -513,7 +580,9 @@ def get_revision(revision_id: str, tenant_id: str = Depends(demo_auth),
 
 
 @router.get("/rules/revisions/{revision_id}/documents/{asset}")
-def get_rule_document(revision_id: str, asset: Literal["cold_start", "dialogue", "schema"],
+def get_rule_document(
+    revision_id: str,
+    asset: Literal["cold_start", "dialogue", "schema", "enneagram"],
                       tenant_id: str = Depends(demo_auth), db: Session = Depends(get_db)) -> dict:
     item = db.get(RuleRevision, revision_id)
     if not item or item.tenant_id != tenant_id:

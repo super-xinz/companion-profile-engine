@@ -11,6 +11,7 @@ RULE_FILES = (
     "01_profile_schema.yaml",
     "02_cold_start_rule_system.yaml",
     "03_dialogue_profile_maintenance.yaml",
+    "04_enneagram_interaction_model.yaml",
 )
 
 
@@ -71,22 +72,69 @@ def compile_rule_pack(source_dir: Path) -> CompiledRulePack:
     if missing:
         raise RuleValidationError([f"缺少规则文件: {name}" for name in missing])
 
-    schema, cold, dialogue = (_load_yaml(source_dir / name) for name in RULE_FILES)
+    schema, cold, dialogue, enneagram = (_load_yaml(source_dir / name) for name in RULE_FILES)
     errors: list[str] = []
     traits = trait_keys(schema)
     scenarios = scenario_keys(schema)
     coverage = schema.get("coverage_manifest", {}).get("source_fields", {})
+    golden_cases = cold.get("golden_cases", [])
+    schema_source_files = set(schema.get("purpose", {}).get("source_files", []))
+    golden_source_files = {case.get("target_profile_source") for case in golden_cases}
     if len(traits) != 17 or len(set(traits)) != 17:
         errors.append(f"核心维度应为17个，实际为{len(set(traits))}个")
     if len(scenarios) != 18 or len(set(scenarios)) != 18:
         errors.append(f"行为场景应为18个，实际为{len(set(scenarios))}个")
     if coverage.get("mbti_dimension_count") != 4:
         errors.append("MBTI 连续维度覆盖声明必须为4")
+    if len(golden_cases) != 5:
+        errors.append(f"完整画像模板应为5个，实际为{len(golden_cases)}个")
+    if len({case.get("birth_date") for case in golden_cases}) != len(golden_cases):
+        errors.append("完整画像模板生日不能重复")
+    if schema_source_files != golden_source_files:
+        errors.append("画像结构来源文件与冷启动完整画像模板不一致")
+    source_profile_dir = source_dir.parent / "source_profiles"
+    missing_source_profiles = sorted(
+        filename for filename in schema_source_files
+        if not (source_profile_dir / filename).exists()
+    )
+    if missing_source_profiles:
+        errors.append(f"缺少完整画像资料: {missing_source_profiles}")
 
     target_schema = f"01_profile_schema.yaml@{schema.get('schema_version')}"
-    for name, rules in (("cold", cold), ("dialogue", dialogue)):
+    for name, rules in (("cold", cold), ("dialogue", dialogue), ("enneagram", enneagram)):
         if rules.get("target_schema") != target_schema:
             errors.append(f"{name} target_schema 不兼容: {rules.get('target_schema')}")
+
+    core_types = enneagram.get("core_types", {})
+    wings = enneagram.get("wings", {})
+    instinct_stacks = enneagram.get("instinct_stacks", {})
+    if set(core_types) != {str(value) for value in range(1, 10)}:
+        errors.append("九型主型参数必须完整覆盖 1-9")
+    expected_wings = {
+        "1w9", "1w2", "2w1", "2w3", "3w2", "3w4", "4w3", "4w5", "5w4",
+        "5w6", "6w5", "6w7", "7w6", "7w8", "8w7", "8w9", "9w8", "9w1",
+    }
+    if set(wings) != expected_wings:
+        errors.append(f"九型侧翼参数覆盖不完整，缺少: {sorted(expected_wings - set(wings))}")
+    expected_stacks = {"SP/SX", "SP/SO", "SX/SP", "SX/SO", "SO/SP", "SO/SX"}
+    if set(instinct_stacks) != expected_stacks:
+        errors.append(f"本能叠层覆盖不完整，缺少: {sorted(expected_stacks - set(instinct_stacks))}")
+    adjacency = enneagram.get("identity_schema", {}).get("wing", {}).get("adjacency", {})
+    for wing_id, spec in wings.items():
+        base, adjacent = int(spec.get("base_type", 0)), int(spec.get("adjacent_type", 0))
+        allowed = adjacency.get(base, adjacency.get(str(base), []))
+        if adjacent not in allowed or wing_id != f"{base}w{adjacent}":
+            errors.append(f"侧翼 {wing_id} 不满足相邻类型规则")
+    weights = enneagram.get("weights", {})
+    weight_keys = ("core_type", "primary_instinct", "secondary_instinct", "wing", "dynamic_state")
+    if abs(sum(float(weights.get(key, 0)) for key in weight_keys) - 1.0) > 1e-9:
+        errors.append("九型静态与动态权重总和必须为 1")
+    accepted_sources = enneagram.get("identity_schema", {}).get("accepted_sources", {})
+    if set(accepted_sources) != {"user_supplied", "external_assessment", "expert_confirmed"}:
+        errors.append("九型身份来源必须覆盖用户声明、外部测评和专家确认")
+    resolved_combination_count = len(core_types) * len(instinct_stacks)
+    if resolved_combination_count != 54:
+        errors.append(f"九型主型×本能叠层应解析为54种组合，实际为{resolved_combination_count}")
 
     for signal_id, signal in cold.get("semantic_signal_extraction", {}).get("generalized_signal_dictionary", {}).items():
         for target, direction in signal.get("effects", {}).items():
@@ -142,7 +190,13 @@ def compile_rule_pack(source_dir: Path) -> CompiledRulePack:
         rule_bank_meta = {"available": True, "filename": workbook.name, "sha256": workbook_sha256(workbook),
                           "code_count": len(index), "fragment_count": sum(len(items) for items in index.values())}
     serialized = json.dumps(
-        {"schema": schema, "cold_start": cold, "dialogue": dialogue, "source_rule_bank": rule_bank_meta},
+        {
+            "schema": schema,
+            "cold_start": cold,
+            "dialogue": dialogue,
+            "enneagram": enneagram,
+            "source_rule_bank": rule_bank_meta,
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -166,8 +220,17 @@ def compile_rule_pack(source_dir: Path) -> CompiledRulePack:
             schema["canonical_profile"]["language_style"]["groups"]["typical_utterances"]["fixed_contexts"]
         ),
         "portrait_field_count": len(schema["canonical_profile"]["portrait"]["fields"]),
+        "golden_case_count": len(golden_cases),
+        "enneagram_core_type_count": len(core_types),
+        "enneagram_wing_count": len(wings),
+        "enneagram_instinct_stack_count": len(instinct_stacks),
+        "enneagram_resolved_combination_count": resolved_combination_count,
+        "enneagram_scene_count": len(enneagram.get("scene_adaptation", {})),
         "source_rule_bank": rule_bank_meta,
-        "warnings": [cold.get("status"), dialogue.get("status")],
+        "warnings": [cold.get("status"), dialogue.get("status"), enneagram.get("status")],
     }
-    version = f"{schema['schema_version']}+{cold['rule_system_version']}+{dialogue['rule_system_version']}"
+    version = (
+        f"{schema['schema_version']}+{cold['rule_system_version']}+"
+        f"{dialogue['rule_system_version']}+enneagram-{enneagram['rule_system_version']}"
+    )
     return CompiledRulePack(version=version, sha256=digest, canonical=canonical, report=report)

@@ -15,18 +15,22 @@ const statusLabels = {
   draft: "草稿", pending_review: "待审核", approved: "已通过", published: "生产中", superseded: "历史版本"
 };
 const roleLabels = {admin: "管理员", reviewer: "审核人", expert: "画像专家", viewer: "只读成员"};
-const assetLabels = {cold_start: "冷启动规则", dialogue: "对话维护规则", schema: "画像结构"};
+const assetLabels = {
+  cold_start: "冷启动规则", dialogue: "对话维护规则",
+  schema: "画像结构", enneagram: "九型互动模型"
+};
 const assetDescriptions = {
   cold_start: "规定人物第一次创建时，如何从授权信息和原始规则库形成低置信度初始画像。",
   dialogue: "规定每轮对话如何理解证据、更新画像、处理冲突并调整回答策略。",
-  schema: "规定一份完整画像必须包含哪些字段，以及每个字段的格式和边界。"
+  schema: "规定一份完整画像必须包含哪些字段，以及每个字段的格式和边界。",
+  enneagram: "规定9主型、18侧翼、6本能叠层、54种组合、场景策略和维护边界。"
 };
 const keyLabels = {
   objective: "目标", non_goals: "不用于哪些事情", input_contract: "输入要求",
   execution_pipeline: "执行流程", feature_calculators: "特征计算",
   rule_bank_cleaning: "原始资料清理", dimension_aggregation: "17维度汇总",
   derived_profile_generation: "派生画像生成", output_requirements: "输出要求",
-  golden_cases: "三个完整画像样例", expert_maintenance_contract: "专家维护边界",
+  golden_cases: "五个完整画像样例", expert_maintenance_contract: "专家维护边界",
   core_principles: "核心原则", turn_processing_pipeline: "每轮对话处理流程",
   semantic_frame_schema: "模型理解结果格式", routing_rules: "信息分类规则",
   evidence_types: "证据类型", language_understanding_rules: "语言理解规则",
@@ -54,7 +58,10 @@ const keyLabels = {
   behavior_style: "行为风格", language_style: "语言风格", portrait: "人物画像",
   interaction_preferences: "沟通偏好", current_state: "当前短期状态", memories: "长期记忆",
   groups: "分组", scenarios: "场景", fixed_contexts: "固定情境",
-  required_paths: "必须包含的内容", meta_fields: "版本与审计信息"
+  required_paths: "必须包含的内容", meta_fields: "版本与审计信息",
+  core_types: "九型9大主型", wings: "18种侧翼", instinct_stacks: "6种本能叠层",
+  scene_adaptation: "场景适配层", layer_model: "六层人格模型", weights: "继承权重",
+  maintenance: "九型维护规则", boundaries: "模型边界", identity_schema: "九型身份结构"
 };
 
 function toast(message) {
@@ -166,7 +173,7 @@ function scalarDocument(value, path, label, readOnly) {
       </select></div>`;
   }
   const type = value === null ? "null" : typeof value;
-  const text = value === null ? "" : String(value);
+  const text = value === null ? (readOnly ? "未提供" : "") : String(value);
   return `<div class="document-field ${text.length > 90 ? "long" : ""}">
     <div class="document-label"><b>${esc(niceLabel(label))}</b>${sourceKey}</div>
     <div class="document-value ${readOnly ? "readonly" : ""}" data-document-path="${encodedPath}" data-value-type="${type}"
@@ -362,7 +369,7 @@ function renderValidation(report) {
   const checks = report.checks || {};
   node.className = `validation-report show ${report.valid ? "valid" : "invalid"}`;
   node.innerHTML = report.valid
-    ? `✓ 检查通过：${checks.trait_count ?? 17} 个画像维度、${checks.dialogue_mapping_count ?? 17} 个对话映射、${checks.semantic_signal_count ?? "—"} 个语义信号、${checks.conflict_count ?? 0} 个冲突。`
+    ? `✓ 检查通过：${checks.trait_count ?? 17} 个画像维度、${checks.dialogue_mapping_count ?? 17} 个对话映射、${checks.enneagram_core_type_count ?? 9} 主型、${checks.enneagram_wing_count ?? 18} 侧翼、${checks.enneagram_resolved_combination_count ?? 54} 种九型组合、${checks.conflict_count ?? 0} 个冲突。`
     : `检查未通过：${(report.errors || []).map(esc).join("；")}`;
 }
 

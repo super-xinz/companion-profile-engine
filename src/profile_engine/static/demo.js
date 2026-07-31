@@ -327,6 +327,7 @@ function renderProfile(overrides = []) {
   const states = profile.runtime?.current_state || {};
   const sourcePortrait = profile.source_portrait || {};
   const sourceDocument = profile.source_profile_document;
+  const enneagram = profile.enneagram_profile || {status: "unassigned", identity: {}, layers: {}, interaction_strategy: {}};
   const portraitLabels = {
     essence: "本质", strengths: "优势", weaknesses: "弱点",
     core_tension: "核心矛盾", suitable_roles: "适合角色"
@@ -337,6 +338,22 @@ function renderProfile(overrides = []) {
       <div class="profile-stat"><small>总体置信度</small><b>${Math.round(profile.meta.overall_confidence * 100)}%</b></div>
       <div class="profile-stat"><small>MBTI 推导</small><b>${esc(profile.mbti_dimensions?.type_label || "XXXX")}</b></div>
       <div class="profile-stat"><small>长期记忆</small><b>${memories.length}</b></div>
+    </div>
+    <div class="trait-section">
+      <div class="section-heading"><b>九型互动画像</b><small>明确输入后派生，不从普通对话自动判断</small><button class="button soft edit-enneagram">设置/更新</button></div>
+      ${enneagram.status === "confirmed" ? `
+        <div class="inspector-card">
+          <div class="data-grid">
+            <label>人格编码</label><span>${esc(enneagram.identity.code)}</span>
+            <label>主型</label><span>${esc(enneagram.identity.core_type_name)}</span>
+            <label>来源</label><span>${esc(enneagram.source)}</span>
+            <label>置信度</label><span>${Math.round((enneagram.confidence || 0) * 100)}%</span>
+            <label>核心驱动力</label><span>${esc(enneagram.layers?.motivation?.core_drive)}</span>
+            <label>注意力方向</label><span>${esc((enneagram.layers?.attention?.instinct_focus || []).join("、"))}</span>
+            <label>沟通策略</label><span>${esc(enneagram.interaction_strategy?.communication?.response_pattern)}</span>
+            <label>成长方向</label><span>${esc(enneagram.interaction_strategy?.companionship?.growth_direction)}</span>
+          </div>
+        </div>` : `<div class="inspector-card"><small>尚未设置九型人格。系统不会根据 MBTI、生日或单轮对话自动推断。</small></div>`}
     </div>
     ${sourceDocument ? `<div class="trait-section">
       <div class="section-heading"><b>原始完整画像</b><small>${esc(sourceDocument.source_file)}</small></div>
@@ -373,6 +390,8 @@ function renderProfile(overrides = []) {
       ${memories.length ? memories.map(item => `<div class="memory-item"><b>${esc(item.key || item.type || "记忆")}</b><p>${esc(item.value || item.summary || item.predicate || "")}</p><small>记录 ${esc(item.memory_id)}</small></div>`).join("") : `<div class="inspector-card"><small>尚未记录长期事实或重要事件。</small></div>`}
     </div>`;
   $$(".edit-trait", view).forEach(button => button.onclick = () => openEdit(button.dataset.path, Number(button.dataset.value), button.dataset.label));
+  const editEnneagram = $(".edit-enneagram", view);
+  if (editEnneagram) editEnneagram.onclick = openEnneagram;
 }
 
 function openEdit(path, value, label) {
@@ -384,6 +403,17 @@ function openEdit(path, value, label) {
   $("#editModalTitle").textContent = `调整${label}`;
   $("#editFieldDescription").textContent = `当前值 ${Number(value).toFixed(2)}。保存后生成新版本，并以人工更正优先于模型推断。`;
   $("#editModal").classList.remove("hidden");
+}
+
+function openEnneagram() {
+  const form = $("#enneagramForm");
+  const identity = appState.profile?.enneagram_profile?.identity || {};
+  form.elements.core_type.value = identity.core_type || 7;
+  form.elements.wing.value = identity.wing || "";
+  form.elements.stack.value = identity.instinct_stack || "SX/SO";
+  form.elements.source.value = appState.profile?.enneagram_profile?.source || "expert_confirmed";
+  form.elements.reason.value = "";
+  $("#enneagramModal").classList.remove("hidden");
 }
 
 async function loadAudit() {
@@ -467,11 +497,22 @@ $(".form-field input[type=range]", $("#editForm")).oninput = event => $("#editVa
 $("#personForm").onsubmit = async event => {
   event.preventDefault();
   const form = new FormData(event.target);
+  const coreType = form.get("enneagram_core_type");
+  const stack = String(form.get("enneagram_stack") || "SX/SO").split("/");
+  const enneagram = coreType ? {
+    core_type: Number(coreType),
+    wing: form.get("enneagram_wing") ? Number(form.get("enneagram_wing")) : null,
+    primary_instinct: stack[0],
+    secondary_instinct: stack[1],
+    source: "expert_confirmed",
+    confidence: 0.95
+  } : null;
   try {
     const data = await api("/demo/api/people", {
       method: "POST", body: JSON.stringify({
         display_name: form.get("display_name"),
         birth_date: form.get("birth_date") || null,
+        enneagram,
         notes: form.get("notes") || null
       })
     });
@@ -480,6 +521,34 @@ $("#personForm").onsubmit = async event => {
     await refreshPeople(false);
     await selectPerson(data.person.user_id);
     toast("人物空间已创建");
+  } catch (error) { toast(error.message); }
+};
+
+$("#enneagramForm").onsubmit = async event => {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const stack = String(form.get("stack")).split("/");
+  const source = String(form.get("source"));
+  const confidence = source === "expert_confirmed" ? 0.95 : (source === "external_assessment" ? 0.85 : 0.8);
+  try {
+    await api(`/demo/api/people/${encodeURIComponent(appState.person.user_id)}/enneagram`, {
+      method: "POST",
+      body: JSON.stringify({
+        expected_profile_version: appState.version,
+        enneagram: {
+          core_type: Number(form.get("core_type")),
+          wing: form.get("wing") ? Number(form.get("wing")) : null,
+          primary_instinct: stack[0],
+          secondary_instinct: stack[1],
+          source,
+          confidence
+        },
+        reason: form.get("reason")
+      })
+    });
+    $("#enneagramModal").classList.add("hidden");
+    await reloadProfile();
+    toast("九型互动画像已更新");
   } catch (error) { toast(error.message); }
 };
 

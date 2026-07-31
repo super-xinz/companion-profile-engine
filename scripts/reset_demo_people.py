@@ -12,27 +12,31 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from profile_engine.config import get_settings  # noqa: E402
 from profile_engine.db import SessionLocal, init_db  # noqa: E402
-from profile_engine.models import AuditLog, IdempotencyRecord, RulePack, User  # noqa: E402
+from profile_engine.models import AuditLog, RulePack, User  # noqa: E402
 from profile_engine.rule_compiler import compile_rule_pack  # noqa: E402
 from profile_engine.schemas import Consent, ProfileInitRequest  # noqa: E402
 from profile_engine.service import ensure_rule_pack, find_user, init_profile  # noqa: E402
+from profile_engine.template_people import TEMPLATE_PEOPLE  # noqa: E402
 from profile_engine.workspace import _ensure_conversation  # noqa: E402
-
-
-SEEDS = (
-    ("person-1988-08-09", "1988年8月9日", "1988-08-09"),
-    ("person-1989-10-15", "1989年10月15日", "1989-10-15"),
-    ("person-1998-12-06", "1998年12月6日", "1998-12-06"),
-)
 
 
 def main() -> None:
     init_db()
     tenant_id = get_settings().demo_tenant_id
     with SessionLocal() as db:
-        db.execute(delete(AuditLog).where(AuditLog.user_id.is_not(None)))
-        db.execute(delete(IdempotencyRecord))
-        db.execute(delete(User))
+        template_user_ids = [person.user_id for person in TEMPLATE_PEOPLE]
+        stored_user_ids = select(User.id).where(
+            User.tenant_id == tenant_id,
+            User.tenant_user_id.in_(template_user_ids),
+        )
+        db.execute(delete(AuditLog).where(
+            AuditLog.tenant_id == tenant_id,
+            AuditLog.user_id.in_(stored_user_ids),
+        ))
+        db.execute(delete(User).where(
+            User.tenant_id == tenant_id,
+            User.tenant_user_id.in_(template_user_ids),
+        ))
         db.commit()
 
         pack = db.scalar(select(RulePack).where(
@@ -44,7 +48,10 @@ def main() -> None:
                 source = (PROJECT_ROOT / source).resolve()
             pack = ensure_rule_pack(db, compile_rule_pack(source))
 
-        for user_id, display_name, birth_date in SEEDS:
+        for person in TEMPLATE_PEOPLE:
+            user_id = person.user_id
+            display_name = person.display_name
+            birth_date = person.birth_date
             init_profile(
                 db,
                 tenant_id,
@@ -63,7 +70,10 @@ def main() -> None:
             _ensure_conversation(db, user, title=f"{display_name}的第一段对话")
             db.commit()
 
-        people = db.scalars(select(User).order_by(User.birth_date)).all()
+        people = db.scalars(select(User).where(
+            User.tenant_id == tenant_id,
+            User.tenant_user_id.in_(template_user_ids),
+        ).order_by(User.birth_date)).all()
         print([(person.tenant_user_id, person.display_name, person.birth_date.isoformat()) for person in people])
 
 

@@ -20,10 +20,11 @@ from .workspace import router as workspace_router
 from .models import IdempotencyRecord, RulePack
 from .extractor import SemanticExtractorError
 from .rule_compiler import compile_rule_pack
-from .schemas import CorrectionRequest, ForgetRequest, MessageIngestRequest, ProfileInitRequest
+from .schemas import (CorrectionRequest, ForgetRequest, MessageIngestRequest, ProfileInitRequest,
+                      SetEnneagramRequest)
 from .service import (ConsentError, NotFoundError, VersionConflictError, correct_profile,
                       ensure_rule_pack, explain_profile, find_user, forget_profile, get_profile,
-                      ingest_message, init_profile, request_id)
+                      ingest_message, init_profile, request_id, set_enneagram_profile)
 
 
 @asynccontextmanager
@@ -36,7 +37,7 @@ async def lifespan(app: FastAPI):
         pack = db.scalar(select(RulePack).where(
             RulePack.status == "published"
         ).order_by(desc(RulePack.published_at)).limit(1))
-        if not pack:
+        if not pack or "enneagram" not in pack.canonical_json:
             settings = get_settings()
             source = settings.rule_source_dir
             if not source.is_absolute():
@@ -201,6 +202,31 @@ def correct(user_id: str, body: CorrectionRequest, request: Request, tenant_id: 
     cached = _cached(db, tenant_id, idem, body)
     if cached: return cached
     response = correct_profile(db, tenant_id, user_id, body, current_pack(request, db), request.state.request_id, idem)
+    _cache(db, tenant_id, idem, body, response)
+    return response
+
+
+@app.post("/v1/profiles/{user_id}:set-enneagram", tags=["profiles"])
+def set_enneagram(
+    user_id: str,
+    body: SetEnneagramRequest,
+    request: Request,
+    tenant_id: str = Depends(auth_context),
+    idem: str = Depends(idempotency_key),
+    db: Session = Depends(get_db),
+) -> dict:
+    cached = _cached(db, tenant_id, idem, body)
+    if cached:
+        return cached
+    response = set_enneagram_profile(
+        db,
+        tenant_id,
+        user_id,
+        body,
+        current_pack(request, db),
+        request.state.request_id,
+        idem,
+    )
     _cache(db, tenant_id, idem, body, response)
     return response
 

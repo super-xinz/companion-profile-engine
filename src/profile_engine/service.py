@@ -11,6 +11,8 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
+from .enneagram import (build_enneagram_profile, empty_enneagram_profile,
+                         resolve_interaction_strategy)
 from .extractor import get_semantic_extractor
 from .models import (AuditLog, CurrentState, ManualOverride, Memory, ProfileEvidence,
                      ProfileVersion, RulePack, RuntimePreference, User)
@@ -20,8 +22,9 @@ from .profile import (GOLDEN_CODES, GOLDEN_TRAITS, TRAIT_NAMES, BirthFeatureCalc
 from .rule_compiler import CompiledRulePack
 from .rule_bank import extract_signals, fragments_for_code
 from .schemas import (CorrectionRequest, ForgetRequest, MessageIngestRequest, ProfileInitRequest,
-                      ReplyGuidance, SemanticFrame, TraitSignal)
+                      ReplyGuidance, SemanticFrame, SetEnneagramRequest, TraitSignal)
 from .source_profiles import apply_source_profile
+from .template_people import template_person_for_birth_date
 
 
 class NotFoundError(Exception):
@@ -97,6 +100,8 @@ def ensure_rule_pack(db: Session, pack: CompiledRulePack) -> RulePack:
 def init_profile(db: Session, tenant_id: str, body: ProfileInitRequest, pack: RulePack, req_id: str, idem_key: str) -> dict:
     if not body.consent.profile:
         raise ConsentError("必须取得画像授权后才能初始化")
+    if body.enneagram and not body.consent.sensitive_inference:
+        raise ConsentError("保存九型人格结构需要敏感推断授权")
     existing = db.scalar(select(User).where(User.tenant_id == tenant_id, User.tenant_user_id == body.tenant_user_id))
     if existing:
         raise VersionConflictError(0, current_version(db, existing).version_no)
@@ -107,9 +112,39 @@ def init_profile(db: Session, tenant_id: str, body: ProfileInitRequest, pack: Ru
     db.flush()
 
     evidence_ids: dict[str, list[str]] = {}
-    if body.birth_date and body.consent.sensitive_inference and body.birth_date.isoformat() in {"1998-12-06", "1989-10-15", "1988-08-09"}:
+    enneagram_evidence_id: str | None = None
+    if body.enneagram:
+        allowed_confidence = pack.canonical_json["enneagram"]["identity_schema"]["accepted_sources"][
+            body.enneagram.source
+        ]
+        identity_confidence = min(body.enneagram.confidence, allowed_confidence)
+        enneagram_evidence = ProfileEvidence(
+            user_id=user.id,
+            source_type=f"enneagram_{body.enneagram.source}",
+            semantic_frame={"type": "enneagram_identity", **body.enneagram.model_dump()},
+            target_path="enneagram_profile.identity",
+            direction=0,
+            base_delta=0.0,
+            impact=identity_confidence,
+            factors={
+                "reliability": identity_confidence,
+                "explicit_input": True,
+                "sensitive_inference_consent": True,
+            },
+            rule_id="ENNEAGRAM-IDENTITY-EXPLICIT",
+            reason="用户、外部测评或专家明确提供的九型人格结构",
+        )
+        db.add(enneagram_evidence)
+        db.flush()
+        enneagram_evidence_id = enneagram_evidence.id
+    birth_template = (
+        template_person_for_birth_date(body.birth_date.isoformat())
+        if body.birth_date and body.consent.sensitive_inference
+        else None
+    )
+    if birth_template and birth_template.numerology_code:
         birth_key = body.birth_date.isoformat()
-        code = {"1998-12-06": "6318", "1989-10-15": "6118", "1988-08-09": "9817"}[birth_key]
+        code = birth_template.numerology_code
         source_dir = get_settings().rule_source_dir
         if not source_dir.is_absolute():
             source_dir = (Path.cwd() / source_dir).resolve()
@@ -142,20 +177,51 @@ def init_profile(db: Session, tenant_id: str, body: ProfileInitRequest, pack: Ru
             db.add(evidence); db.flush(); evidence_ids[trait] = [evidence.id]
 
     effective_birth = body.birth_date.isoformat() if body.birth_date and body.consent.sensitive_inference else None
-    profile, warnings = build_initial_profile(user.id, body.display_name, effective_birth, body.timezone, pack.canonical_json, evidence_ids)
+    profile, warnings = build_initial_profile(
+        user.id,
+        body.display_name,
+        effective_birth,
+        body.timezone,
+        pack.canonical_json,
+        evidence_ids,
+        body.enneagram.model_dump() if body.enneagram else None,
+    )
+    if enneagram_evidence_id:
+        profile["enneagram_profile"]["provenance"].append(enneagram_evidence_id)
     if effective_birth:
         apply_source_profile(profile, effective_birth)
         recalculate_meta(profile)
     if body.birth_date and not body.consent.sensitive_inference:
         profile["identity"]["birth_date"] = body.birth_date.isoformat()
         profile["meta"]["warnings"].append("未授权敏感推断，生日仅作为用户事实保存，未用于冷启动。")
-    profile["meta"]["rule_pack_versions"] = {"cold_start": pack.version, "dialogue": pack.version, "sha256": pack.sha256}
+    profile["meta"]["rule_pack_versions"] = {
+        "cold_start": pack.version,
+        "dialogue": pack.version,
+        "enneagram": pack.version,
+        "sha256": pack.sha256,
+    }
     version = ProfileVersion(user_id=user.id, version_no=1, schema_version=profile["meta"]["schema_version"],
                              cold_start_rule_pack_version=pack.version, dialogue_rule_pack_version=pack.version,
                              overall_confidence=profile["meta"]["overall_confidence"], snapshot=profile)
     db.add(version)
-    _audit(db, req_id, tenant_id, "profile.init", user, None, profile, [item for values in evidence_ids.values() for item in values],
-           [f"COLD-GOLDEN-{body.birth_date.isoformat()}" if body.birth_date else "COLD-NEUTRAL"], idem_key)
+    audit_evidence = [item for values in evidence_ids.values() for item in values]
+    if enneagram_evidence_id:
+        audit_evidence.append(enneagram_evidence_id)
+    _audit(
+        db,
+        req_id,
+        tenant_id,
+        "profile.init",
+        user,
+        None,
+        profile,
+        audit_evidence,
+        [
+            f"COLD-GOLDEN-{body.birth_date.isoformat()}" if body.birth_date else "COLD-NEUTRAL",
+            *(["ENNEAGRAM-IDENTITY-EXPLICIT"] if body.enneagram else []),
+        ],
+        idem_key,
+    )
     db.commit()
     return {"request_id": req_id, "profile_version": 1, "rule_pack": _pack_summary(pack), "profile": profile, "warnings": warnings}
 
@@ -164,6 +230,7 @@ def get_profile(db: Session, tenant_id: str, tenant_user_id: str) -> dict:
     user = find_user(db, tenant_id, tenant_user_id)
     version = current_version(db, user)
     profile = clone_profile(version.snapshot)
+    profile.setdefault("enneagram_profile", empty_enneagram_profile())
     now = datetime.now(timezone.utc)
     active_states = db.scalars(select(CurrentState).where(CurrentState.user_id == user.id, CurrentState.expires_at > now)).all()
     preferences = db.scalars(select(RuntimePreference).where(RuntimePreference.user_id == user.id)).all()
@@ -360,11 +427,18 @@ def _apply_runtime_frame(db: Session, user: User, profile: dict, frame: Semantic
     return changed, records
 
 
-def _reply_hints(profile: dict) -> dict:
+def _reply_hints(profile: dict, interaction_strategy: dict | None = None) -> dict:
     prefs = profile["runtime"].get("interaction_preferences", {})
     states = profile["runtime"].get("current_state", {})
     hints: dict[str, Any] = {"max_sentences": 5, "answer_first": False, "empathy_first": False,
                              "question_count": 1, "structure_level": "simple", "humor_level": prefs.get("humor_level", 0.2)}
+    if interaction_strategy:
+        hints.update(interaction_strategy.get("hints", {}))
+        hints["enneagram_strategy"] = {
+            key: value for key, value in interaction_strategy.items()
+            if key not in {"hints", "precedence"}
+        }
+        hints["strategy_precedence"] = interaction_strategy.get("precedence", [])
     if prefs.get("response_length") == "short":
         hints.update(max_sentences=3, answer_first=True)
     if prefs.get("empathy_first", 0) >= 0.67:
@@ -478,7 +552,12 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
         e = db.get(ProfileEvidence, evidence_id)
         evidence_response.append({"evidence_id": e.id, "source_type": e.source_type, "target_path": e.target_path,
                                   "direction": e.direction, "impact": round(e.base_delta * e.impact, 4), "reason": e.reason})
-    reply_hints = _merge_reply_guidance(_reply_hints(profile), analysis.reply_guidance)
+    interaction_strategy = resolve_interaction_strategy(
+        profile,
+        pack.canonical_json.get("enneagram", {}),
+        body.context.topic,
+    )
+    reply_hints = _merge_reply_guidance(_reply_hints(profile, interaction_strategy), analysis.reply_guidance)
     return {"request_id": req_id, "profile_version": new_no, "rule_pack": _pack_summary(pack),
             "semantic_extractor_version": extractor.version, "semantic_frames": [f.model_dump() for f in frames], "evidence": evidence_response,
             "candidate_trait_signals": [signal.model_dump() for signal in analysis.trait_signals],
@@ -487,7 +566,10 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
             "model_reply_guidance": analysis.reply_guidance.model_dump(), "reply_hints": reply_hints,
             "strategy_trace": {"semantic_analysis": extractor.version, "profile_version_used": new_no,
                                "candidate_signals": len(analysis.trait_signals),
-                               "accepted_signals": len(accepted_trait_signals), "consumed_by_chatbot": False},
+                               "accepted_signals": len(accepted_trait_signals),
+                               "enneagram_identity": profile.get("enneagram_profile", {}).get("identity", {}).get("code"),
+                               "scene": interaction_strategy.get("scene") if interaction_strategy else None,
+                               "consumed_by_chatbot": False},
             "no_profile_change": not changed}
 
 
@@ -530,7 +612,9 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
     user = find_user(db, tenant_id, tenant_user_id)
     version = current_version(db, user)
     _check_version(version, body.expected_profile_version)
-    if body.target_path.startswith(("mbti_dimensions", "behavior_style", "language_style", "portrait", "meta")):
+    if body.target_path.startswith(
+        ("mbti_dimensions", "behavior_style", "language_style", "portrait", "enneagram_profile", "meta")
+    ):
         raise ValueError("派生字段不可直接更正；请更正底层事实或核心维度")
     before = clone_profile(version.snapshot)
     profile = clone_profile(version.snapshot)
@@ -576,8 +660,10 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
         profile["birth_analysis"]["numerology_code"] = code
         profile["meta"]["warnings"] = warnings
         derived = rebuild_derived(profile, pack.canonical_json["schema"])
-        if corrected_date.isoformat() in GOLDEN_CODES:
-            profile["mbti_dimensions"]["type_label"] = GOLDEN_CODES[corrected_date.isoformat()][1]
+        corrected_template = template_person_for_birth_date(corrected_date.isoformat())
+        if corrected_template:
+            apply_source_profile(profile, corrected_date.isoformat())
+            profile["mbti_dimensions"]["type_label"] = corrected_template.mbti
     elif body.target_path.startswith("identity."):
         parent[key] = body.value
         if key == "display_name": user.display_name = body.value
@@ -618,6 +704,94 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
             "after": applied_value, "derived_patch": derived}
 
 
+def set_enneagram_profile(
+    db: Session,
+    tenant_id: str,
+    tenant_user_id: str,
+    body: SetEnneagramRequest,
+    pack: RulePack,
+    req_id: str,
+    idem_key: str,
+) -> dict:
+    user = find_user(db, tenant_id, tenant_user_id)
+    if not user.sensitive_inference_consent:
+        raise ConsentError("保存九型人格结构需要敏感推断授权")
+    version = current_version(db, user)
+    _check_version(version, body.expected_profile_version)
+    before = clone_profile(version.snapshot)
+    profile = clone_profile(version.snapshot)
+    previous = profile.get("enneagram_profile") or empty_enneagram_profile()
+    for item in db.scalars(select(ProfileEvidence).where(
+        ProfileEvidence.user_id == user.id,
+        ProfileEvidence.target_path == "enneagram_profile.identity",
+        ProfileEvidence.invalidated.is_(False),
+    )):
+        item.invalidated = True
+        item.invalidated_at = datetime.now(timezone.utc)
+    allowed_confidence = pack.canonical_json["enneagram"]["identity_schema"]["accepted_sources"][
+        body.enneagram.source
+    ]
+    identity_confidence = min(body.enneagram.confidence, allowed_confidence)
+    evidence = ProfileEvidence(
+        user_id=user.id,
+        source_type=f"enneagram_{body.enneagram.source}",
+        semantic_frame={"type": "enneagram_identity", **body.enneagram.model_dump()},
+        target_path="enneagram_profile.identity",
+        direction=0,
+        base_delta=0.0,
+        impact=identity_confidence,
+        factors={
+            "reliability": identity_confidence,
+            "explicit_input": True,
+            "sensitive_inference_consent": True,
+        },
+        rule_id="ENNEAGRAM-IDENTITY-EXPLICIT",
+        reason=body.reason,
+    )
+    db.add(evidence)
+    db.flush()
+    profile["enneagram_profile"] = build_enneagram_profile(
+        body.enneagram.model_dump(),
+        pack.canonical_json["enneagram"],
+    )
+    profile["enneagram_profile"]["provenance"].append(evidence.id)
+    new_no = version.version_no + 1
+    profile["meta"]["profile_version"] = new_no
+    profile["meta"]["schema_version"] = pack.canonical_json["schema"]["schema_version"]
+    profile["meta"]["rule_pack_versions"]["enneagram"] = pack.version
+    profile["meta"]["rule_pack_versions"]["sha256"] = pack.sha256
+    recalculate_meta(profile)
+    db.add(ProfileVersion(
+        user_id=user.id,
+        version_no=new_no,
+        schema_version=profile["meta"]["schema_version"],
+        cold_start_rule_pack_version=version.cold_start_rule_pack_version,
+        dialogue_rule_pack_version=pack.version,
+        overall_confidence=profile["meta"]["overall_confidence"],
+        snapshot=profile,
+    ))
+    _audit(
+        db,
+        req_id,
+        tenant_id,
+        "profile.enneagram.set",
+        user,
+        before,
+        profile,
+        [evidence.id],
+        ["ENNEAGRAM-IDENTITY-EXPLICIT", *profile["enneagram_profile"]["provenance"][:-1]],
+        idem_key,
+    )
+    db.commit()
+    return {
+        "request_id": req_id,
+        "profile_version": new_no,
+        "before": previous,
+        "enneagram_profile": profile["enneagram_profile"],
+        "rule_pack": _pack_summary(pack),
+    }
+
+
 def forget_profile(db: Session, tenant_id: str, tenant_user_id: str, body: ForgetRequest, pack: RulePack,
                    req_id: str, idem_key: str) -> dict:
     user = find_user(db, tenant_id, tenant_user_id)
@@ -652,6 +826,16 @@ def forget_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Forge
                     entry.update(value=0.5, confidence=0.1, evidence_refs=[r for r in entry["evidence_refs"] if r not in affected])
         profile["birth_analysis"]["numerology_code"] = None
         rebuild_derived(profile, pack.canonical_json["schema"])
+    elif body.scope == "enneagram":
+        for item in db.scalars(select(ProfileEvidence).where(
+            ProfileEvidence.user_id == user.id,
+            ProfileEvidence.target_path == "enneagram_profile.identity",
+            ProfileEvidence.invalidated.is_(False),
+        )):
+            item.invalidated = True
+            item.invalidated_at = datetime.now(timezone.utc)
+            affected.append(item.id)
+        profile["enneagram_profile"] = empty_enneagram_profile()
     else:
         user.inference_enabled = False
         for item in db.scalars(select(ProfileEvidence).where(ProfileEvidence.user_id == user.id, ProfileEvidence.invalidated.is_(False))):
@@ -659,6 +843,7 @@ def forget_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Forge
         for item in db.scalars(select(Memory).where(Memory.user_id == user.id, Memory.active.is_(True))):
             item.active = False; affected.append(item.id)
         profile["runtime"] = {"interaction_preferences": {}, "current_state": {}, "memories": []}
+        profile["enneagram_profile"] = empty_enneagram_profile()
         profile["meta"]["warnings"] = ["画像推断已关闭，历史证据与记忆已失效。"]
     new_no = version.version_no + 1; profile["meta"]["profile_version"] = new_no; recalculate_meta(profile)
     db.add(ProfileVersion(user_id=user.id, version_no=new_no, schema_version=profile["meta"]["schema_version"],

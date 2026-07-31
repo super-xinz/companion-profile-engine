@@ -16,7 +16,7 @@
 
 ### 规则管理工作台
 
-- 以完整文档方式维护三份规则资产，而不是把规则拆成难以理解的零散字段。
+- 以完整文档方式维护四份规则资产，而不是把规则拆成难以理解的零散字段。
 - 支持草稿、保存、提交审核、批准、正式发布、版本差异比较与回滚。
 - 在发布前校验文档结构、字段引用、规则格式及冲突。
 - 提供隔离测试：对模拟对话并排展示新旧规则的理解、规则命中、画像变化和回答策略，不改动真实画像。
@@ -25,17 +25,20 @@
 ### 画像与模型边界
 
 - 17 个核心画像维度、MBTI 连续维度、长期记忆、交互偏好与短期状态。
+- 九型互动画像支持 9 个主型、18 个侧翼、6 种本能叠层、54 种组合与 10 类场景适配。
+- 九型身份只接受用户明确声明、已授权外部测评或专家确认；不会由 MBTI、生日、单一行为或普通对话自动分类。
+- 主型、侧翼、本能、当前状态和场景分别生成动机、注意力、表达、状态与互动策略；用户明确偏好和安全规则优先。
 - 规则引擎负责证据校验、置信度、冲突、单轮限幅、跨会话重复、版本和审计。
 - 千问（可选）负责从对话中生成结构化语义候选与回答策略，**不直接写入数据库**。
-- 内置三份经授权的完整人物画像；其他人物可在工作台中新建。
+- 内置五份经授权的完整人物画像；其他人物可在工作台中新建。
 
 ## 项目结构
 
 ```text
 profile-engine/
 ├── src/profile_engine/       # FastAPI 服务、画像引擎、规则与网页工作台
-├── rules/                    # 三份规则源文档
-├── source_profiles/          # 已授权的三份完整画像资料
+├── rules/                    # 四份规则源文档
+├── source_profiles/          # 已授权的五份完整画像资料
 ├── migrations/               # Alembic 数据库迁移
 ├── scripts/                  # 演示与初始化脚本
 ├── tests/                    # API、规则、工作台和模型适配测试
@@ -45,14 +48,23 @@ profile-engine/
 
 ## 快速开始
 
-需要 Python 3.9 或更高版本。
+需要 Conda；项目统一使用仓库内的 Python 3.12 Conda 环境。
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
+conda env create -p ./.conda-env -f environment.yml
+conda run -p ./.conda-env pip install -e '.[dev]'
 cp .env.example .env
-.venv/bin/alembic upgrade head
-.venv/bin/profile-engine
+conda run -p ./.conda-env alembic upgrade head
+conda run --no-capture-output -p ./.conda-env profile-engine
+```
+
+也可以使用统一命令：
+
+```bash
+make install
+cp .env.example .env
+make migrate
+make run
 ```
 
 打开以下地址：
@@ -67,7 +79,7 @@ cp .env.example .env
 运行测试：
 
 ```bash
-env PROFILE_SEMANTIC_EXTRACTOR=deterministic .venv/bin/pytest
+make test
 ```
 
 ## 环境变量
@@ -108,10 +120,30 @@ docker compose up --build
 | `POST` | `/v1/profiles/{user_id}/messages:ingest` | 写入一轮消息并返回处理结果 |
 | `GET` | `/v1/profiles/{user_id}/explain` | 查看证据、反证和版本历史 |
 | `POST` | `/v1/profiles/{user_id}:correct` | 人工更正画像或事实 |
+| `POST` | `/v1/profiles/{user_id}:set-enneagram` | 设置或替换已确认的九型人格结构 |
 | `POST` | `/v1/profiles/{user_id}:forget` | 遗忘记忆、证据或关闭画像 |
 | `GET` | `/v1/rule-packs/current` | 查看当前已发布规则包 |
 
 写操作需要租户凭据、幂等键和正确的画像版本；版本冲突时服务返回 HTTP 409。
+
+九型身份示例：
+
+```json
+{
+  "expected_profile_version": 1,
+  "enneagram": {
+    "core_type": 7,
+    "wing": 6,
+    "primary_instinct": "SX",
+    "secondary_instinct": "SO",
+    "source": "expert_confirmed",
+    "confidence": 0.95
+  },
+  "reason": "专家复核测评结果"
+}
+```
+
+对话请求可在 `context.topic` 中提供 `career`、`learning`、`family`、`health` 等场景，系统会生成场景化互动策略，但不会修改九型身份。使用 `scope: "enneagram"` 可单独清除九型数据及其派生策略。
 
 ## 数据与隐私
 
@@ -123,7 +155,7 @@ docker compose up --build
 ## 开发说明
 
 - 规则源文件位于 `rules/`，发布后会编译为带版本和校验结果的规则资产。
-- `scripts/reset_demo_people.py` 会清空演示人物并重新导入三份内置画像；仅可用于明确授权的演示数据库。
+- `scripts/reset_demo_people.py` 会重建五位内置模板人物并保留其他演示人物；仅可用于明确授权的演示数据库。
 - 开发时请保持 `.env`、数据库文件、模型密钥和任何未授权的个人资料不进入 Git。
 
 ## 许可证

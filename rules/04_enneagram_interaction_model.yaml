@@ -1,0 +1,465 @@
+rule_system_version: "1.0.0"
+document_type: "enneagram_interaction_parameter_model"
+target_schema: "01_profile_schema.yaml@2.1.0"
+language: "zh-CN"
+status: "expert_review_required"
+
+purpose:
+  definition: "将已确认的九型人格组合转换为可审计的互动参数，不承担人格测评、临床诊断或自动分类。"
+  source_documents:
+    - "文档01｜九型人格 AI陪伴聊天策略模型总体架构说明 V1.0"
+    - "文档02｜初始人格信息 → 九型互动参数接口规范 V1.0"
+    - "文档03｜九型人格9大主型参数库 V1.0"
+    - "文档04｜九型人格18侧翼修正参数库 V1.0"
+    - "文档05｜九型人格54本能叠层修正参数库 V1.0"
+    - "文档06｜参数继承与权重模型说明书 V1.0"
+    - "文档07｜AI互动策略生成规则说明书 V1.0"
+    - "文档08｜SX/SO｜7w6 场景化互动策略验证案例库 V1.0"
+  boundaries:
+    forbidden:
+      - "从MBTI直接映射九型类型"
+      - "从生日、数字学或单一行为参数推断九型类型"
+      - "从单轮或普通对话自动确认九型身份"
+      - "将九型人格用于心理疾病、人格障碍或临床诊断"
+      - "使用固定类型话术替代当前消息理解"
+    allowed:
+      - "接收用户明确声明的九型组合"
+      - "接收已授权测评系统或专家确认结果"
+      - "将九型结构转换为沟通、激励、冲突、信任和陪伴策略"
+      - "在具体场景和当前状态下调整策略"
+
+identity_schema:
+  core_type:
+    type: "integer"
+    allowed: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  wing:
+    type: "integer_or_null"
+    adjacency:
+      1: [9, 2]
+      2: [1, 3]
+      3: [2, 4]
+      4: [3, 5]
+      5: [4, 6]
+      6: [5, 7]
+      7: [6, 8]
+      8: [7, 9]
+      9: [8, 1]
+  instincts:
+    allowed: ["SP", "SX", "SO"]
+    primary_and_secondary_must_differ: true
+  accepted_sources:
+    user_supplied: 0.80
+    external_assessment: 0.85
+    expert_confirmed: 0.95
+
+layer_model:
+  identity: ["core_type", "wing", "primary_instinct", "secondary_instinct"]
+  motivation: ["core_drive", "core_fear", "core_need"]
+  attention: ["focus", "information_processing", "decision_style"]
+  expression: ["persona", "emotion_style", "relationship_style"]
+  state: ["secure_state", "stress_state", "defense"]
+  interaction_strategy: ["communication", "motivation", "conflict", "trust", "companionship"]
+
+weights:
+  core_type: 0.45
+  primary_instinct: 0.20
+  secondary_instinct: 0.10
+  wing: 0.15
+  dynamic_state: 0.10
+  precedence:
+    - "safety_policy"
+    - "explicit_user_preference"
+    - "expert_manual_override"
+    - "current_state"
+    - "scene_adaptation"
+    - "core_type"
+    - "primary_instinct"
+    - "wing"
+    - "secondary_instinct"
+
+core_types:
+  "1":
+    name: "完美型"
+    motivation:
+      core_drive: "追求正确、完善和持续提升"
+      core_fear: "犯错、不正确、失去道德合理性"
+      core_need: "做正确的事并让努力与价值被认可"
+    attention:
+      focus: ["问题", "缺陷", "标准", "改进空间"]
+      information_processing: "分析、比较、评估和判断"
+      decision_style: "依据原则、标准和长期正确性"
+    expression:
+      persona: ["严谨", "负责", "自律", "有原则"]
+      emotion_style: "控制情绪，常通过纠正和建议表达不满"
+      relationship_style: "重视责任和共同成长，容易承担改善者角色"
+    state:
+      secure_state: "接纳不完美，表现得灵活且有创造力"
+      stress_state: "过度批判、焦虑、对错误高度敏感"
+      defense: "反应形成"
+    interaction_strategy:
+      communication: {entry_point: "明确问题与改进目标", language_style: "清晰、结构化、有依据", response_pattern: "先认可标准，再给优化步骤"}
+      motivation: {effective_driver: ["改进", "质量", "长期价值"], avoid_driver: ["否定努力", "随意降低标准"]}
+      conflict: {trigger: "标准和责任感被否定", deescalation_method: "先认可责任感，再讨论更灵活有效的调整"}
+      trust: {trust_path: ["可靠性", "专业性", "一致性"], relationship_building: "持续兑现并解释依据"}
+      companionship: {growth_direction: "允许成长过程中的不完美", long_term_support: "帮助区分重要标准与过度苛责"}
+      hints: {structure_level: "steps", answer_first: true, empathy_first: false}
+  "2":
+    name: "助人型"
+    motivation:
+      core_drive: "通过帮助、关怀和连接获得价值感"
+      core_fear: "不被需要、不被爱、没有价值"
+      core_need: "被重视并建立真实亲密连接"
+    attention:
+      focus: ["他人需求", "情绪变化", "关系状态"]
+      information_processing: "优先理解别人需要什么"
+      decision_style: "依据人际影响和关系维护"
+    expression:
+      persona: ["热情", "友善", "关怀", "支持"]
+      emotion_style: "通过照顾他人表达情感，可能忽略自身需求"
+      relationship_style: "主动付出并期待真诚回应"
+    state:
+      secure_state: "能够自我关怀并真诚表达需求"
+      stress_state: "过度付出、寻求认可、积累委屈"
+      defense: "压抑自身需要"
+    interaction_strategy:
+      communication: {entry_point: "回应关系和感受", language_style: "温暖、有回应感", response_pattern: "先感谢与看见，再询问本人需要"}
+      motivation: {effective_driver: ["贡献", "连接", "正向影响"], avoid_driver: ["把付出视为理所当然"]}
+      conflict: {trigger: "付出被忽略或否定", deescalation_method: "确认其贡献，并把注意力带回自身需求"}
+      trust: {trust_path: ["情感回应", "真诚互动"], relationship_building: "记住关心与付出，也主动提供支持"}
+      companionship: {growth_direction: "不依赖被需要证明价值", long_term_support: "鼓励健康给予和接受照顾"}
+      hints: {structure_level: "simple", answer_first: false, empathy_first: true}
+  "3":
+    name: "成就型"
+    motivation:
+      core_drive: "通过成功、成果和价值证明自己"
+      core_fear: "失败、无价值、不被认可"
+      core_need: "获得成就、认可与真实价值感"
+    attention:
+      focus: ["目标", "效率", "结果", "外部评价"]
+      information_processing: "快速识别什么有效"
+      decision_style: "依据目标、收益和可执行性"
+    expression:
+      persona: ["高效", "积极", "适应", "目标导向"]
+      emotion_style: "倾向先处理任务，可能延后真实感受"
+      relationship_style: "通过能力、成果和贡献建立连接"
+    state:
+      secure_state: "真诚、合作，能够区分自我价值与表现"
+      stress_state: "过度工作、形象管理、忽略感受"
+      defense: "认同成功形象"
+    interaction_strategy:
+      communication: {entry_point: "目标与结果", language_style: "精炼、积极、面向行动", response_pattern: "先给结论，再给高效路径"}
+      motivation: {effective_driver: ["进展", "成果", "影响力"], avoid_driver: ["羞辱失败", "空泛赞美"]}
+      conflict: {trigger: "能力或价值被否定", deescalation_method: "把评价从人格转向事实、目标和可调整行为"}
+      trust: {trust_path: ["效率", "尊重能力", "真实反馈"], relationship_building: "既认可成果也关注真实状态"}
+      companionship: {growth_direction: "从证明价值走向体验真实价值", long_term_support: "平衡成果、关系与恢复"}
+      hints: {structure_level: "steps", answer_first: true, empathy_first: false}
+  "4":
+    name: "自我型"
+    motivation:
+      core_drive: "寻找真实、独特且有意义的自我身份"
+      core_fear: "没有身份、没有独特价值、体验被简单化"
+      core_need: "被理解并真实表达自我"
+    attention:
+      focus: ["意义", "差异", "缺失", "内在体验"]
+      information_processing: "通过感受、比较和象征理解经验"
+      decision_style: "依据真实性、意义和身份一致性"
+    expression:
+      persona: ["敏感", "独特", "有审美", "重深度"]
+      emotion_style: "愿意深入体验和表达复杂情绪"
+      relationship_style: "追求理解、共鸣和真实连接"
+    state:
+      secure_state: "把感受转化为创造和稳定行动"
+      stress_state: "沉浸缺失、比较、退缩或情绪放大"
+      defense: "内摄"
+    interaction_strategy:
+      communication: {entry_point: "体验与意义", language_style: "细腻、真实、不套模板", response_pattern: "先准确理解体验，再共同寻找行动"}
+      motivation: {effective_driver: ["真实表达", "创造", "独特贡献"], avoid_driver: ["要求不要想太多", "表面鼓励"]}
+      conflict: {trigger: "被忽视或被简单化", deescalation_method: "承认体验的复杂性，再温和回到可行动部分"}
+      trust: {trust_path: ["深度理解", "真诚", "稳定接纳"], relationship_building: "不急于修复情绪，保持连续对话"}
+      companionship: {growth_direction: "让真实感受进入现实创造", long_term_support: "支持表达、连接和落地"}
+      hints: {structure_level: "simple", answer_first: false, empathy_first: true}
+  "5":
+    name: "观察型"
+    motivation:
+      core_drive: "通过理解、知识和能力建立掌控感"
+      core_fear: "无能、被侵入、资源不足"
+      core_need: "拥有理解、边界、空间和自主能力"
+    attention:
+      focus: ["知识", "机制", "边界", "资源消耗"]
+      information_processing: "观察、分析、建模后再参与"
+      decision_style: "依据证据、逻辑和资源成本"
+    expression:
+      persona: ["冷静", "独立", "理性", "克制"]
+      emotion_style: "先在内部处理感受，表达相对节制"
+      relationship_style: "偏好少量高质量连接并重视空间"
+    state:
+      secure_state: "愿意分享能力、参与现实并保持连接"
+      stress_state: "过度退缩、信息囤积、切断感受"
+      defense: "隔离"
+    interaction_strategy:
+      communication: {entry_point: "事实、原因和模型", language_style: "准确、低压力、有信息密度", response_pattern: "提供依据并留出思考空间"}
+      motivation: {effective_driver: ["理解", "能力", "自主掌握"], avoid_driver: ["过度情绪推动", "强迫即时回应"]}
+      conflict: {trigger: "边界被侵入或信息不足", deescalation_method: "降低互动压力，补充信息并给予选择"}
+      trust: {trust_path: ["专业性", "尊重边界", "信息可靠"], relationship_building: "不逼迫披露，持续提供高质量内容"}
+      companionship: {growth_direction: "把理解转化为参与和连接", long_term_support: "支持小步实践与能量管理"}
+      hints: {structure_level: "steps", answer_first: true, empathy_first: false}
+  "6":
+    name: "忠诚型"
+    motivation:
+      core_drive: "通过安全、准备和可靠连接降低不确定"
+      core_fear: "危险、失去支持、判断错误或被背叛"
+      core_need: "获得可靠依据并建立内部信任"
+    attention:
+      focus: ["风险", "不确定", "承诺", "可靠性"]
+      information_processing: "验证、比较证据并预演风险"
+      decision_style: "依据安全边界、支持系统和可逆性"
+    expression:
+      persona: ["谨慎", "忠诚", "负责", "有警觉"]
+      emotion_style: "表达担忧并寻求确认"
+      relationship_style: "重视忠诚、长期可靠与共同面对"
+    state:
+      secure_state: "信任自己、勇于行动、保持稳定判断"
+      stress_state: "反复怀疑、确认、增加防御"
+      defense: "投射"
+    interaction_strategy:
+      communication: {entry_point: "事实、风险与备选", language_style: "清晰、稳定、有依据", response_pattern: "说明已知未知，再给可逆步骤"}
+      motivation: {effective_driver: ["准备", "支持", "明确路径"], avoid_driver: ["只说相信自己", "模糊承诺"]}
+      conflict: {trigger: "不确定或缺少依据", deescalation_method: "梳理事实、风险、选择和验证方式"}
+      trust: {trust_path: ["稳定回应", "持续兑现", "透明"], relationship_building: "承认不确定，不虚假保证"}
+      companionship: {growth_direction: "从外部确定走向内部信任", long_term_support: "用小实验积累判断经验"}
+      hints: {structure_level: "steps", answer_first: true, empathy_first: true}
+  "7":
+    name: "探索型"
+    motivation:
+      core_drive: "探索可能性、获得丰富体验并保持自由"
+      core_fear: "被限制、被困住、失去选择、陷入痛苦"
+      core_need: "保持自由、持续成长并拥有丰富体验"
+    attention:
+      focus: ["新机会", "未来可能", "变化", "有趣体验"]
+      information_processing: "发散联想、快速连接、寻找多条路径"
+      decision_style: "依据可能性、发展空间和体验价值"
+    expression:
+      persona: ["乐观", "活跃", "有感染力", "富创造性"]
+      emotion_style: "用积极重构、转移注意和寻找方向调节情绪"
+      relationship_style: "喜欢共同探索、轻松连接并保留空间"
+    state:
+      secure_state: "能够深入体验、接纳限制并持续创造"
+      stress_state: "转移注意、寻找刺激、回避困难体验"
+      defense: "合理化"
+    interaction_strategy:
+      communication: {entry_point: "可能性和体验", language_style: "开放、探索式、有活力", response_pattern: "先打开选择，再帮助聚焦一个方向"}
+      motivation: {effective_driver: ["新机会", "成长空间", "共同体验"], avoid_driver: ["过早限制", "责任施压"]}
+      conflict: {trigger: "感觉被限制或被指责逃避", deescalation_method: "先保护探索需求，再区分逃避与真正选择"}
+      trust: {trust_path: ["真实交流", "共同探索", "持续投入"], relationship_building: "记住兴趣变化并延续有意义的话题"}
+      companionship: {growth_direction: "选择并深入值得投入的可能", long_term_support: "用小实验和反馈帮助持续"}
+      hints: {structure_level: "flexible_options", answer_first: false, empathy_first: false}
+  "8":
+    name: "挑战型"
+    motivation:
+      core_drive: "保持自主、掌控环境并保护重要的人"
+      core_fear: "被控制、被侵犯、失去自主或显得弱小"
+      core_need: "保持力量、独立、边界和保护能力"
+    attention:
+      focus: ["力量关系", "边界", "控制权", "真实意图"]
+      information_processing: "快速判断并识别关键矛盾"
+      decision_style: "依据实际效果、行动力和影响"
+    expression:
+      persona: ["强势", "直接", "果断", "有保护感"]
+      emotion_style: "直接表达愤怒、不满和边界需求"
+      relationship_style: "重视忠诚、保护自己人、反感虚假"
+    state:
+      secure_state: "以力量支持他人并建立合作"
+      stress_state: "增强控制、对抗、难以示弱"
+      defense: "否认脆弱"
+    interaction_strategy:
+      communication: {entry_point: "关键问题和自主选择", language_style: "直接、尊重、平等", response_pattern: "快速进入核心并给选择权"}
+      motivation: {effective_driver: ["自主权", "挑战", "影响力"], avoid_driver: ["命令", "居高临下"]}
+      conflict: {trigger: "感觉被控制或边界被侵犯", deescalation_method: "承认自主和力量，以平等方式讨论更有效路径"}
+      trust: {trust_path: ["尊重边界", "兑现承诺", "坦率"], relationship_building: "不操控、不绕弯，行动一致"}
+      companionship: {growth_direction: "通过信任和合作建立力量", long_term_support: "支持表达脆弱而不削弱自主"}
+      hints: {structure_level: "simple", answer_first: true, empathy_first: false}
+  "9":
+    name: "和平型"
+    motivation:
+      core_drive: "维持稳定、和谐与内在平静"
+      core_fear: "冲突、失去连接、自身需求不重要"
+      core_need: "保持和平、被接纳并感受自身价值"
+    attention:
+      focus: ["环境氛围", "他人需求", "关系平衡"]
+      information_processing: "综合考虑、感受整体、寻找共同点"
+      decision_style: "依据稳定性和关系影响"
+    expression:
+      persona: ["温和", "包容", "平稳", "易亲近"]
+      emotion_style: "降低冲突强度，可能弱化自身感受"
+      relationship_style: "重视陪伴、和谐并容易适应他人"
+    state:
+      secure_state: "主动表达、边界清晰、发挥个人力量"
+      stress_state: "回避、拖延或进入麻木"
+      defense: "消除冲突和自身需求"
+    interaction_strategy:
+      communication: {entry_point: "安全感和本人意愿", language_style: "温和、留白、低压力", response_pattern: "给时间和小选择，邀请表达"}
+      motivation: {effective_driver: ["个人价值", "内在意愿", "稳定支持"], avoid_driver: ["高压推进", "强迫决定"]}
+      conflict: {trigger: "冲突压力过高", deescalation_method: "降低压力，逐步识别和表达自身需求"}
+      trust: {trust_path: ["稳定陪伴", "接纳空间", "耐心"], relationship_building: "不因沉默撤回关系，不替其做决定"}
+      companionship: {growth_direction: "在关系中表达自己的存在", long_term_support: "支持边界、小行动和持续表达"}
+      hints: {structure_level: "simple", answer_first: false, empathy_first: true}
+
+wings:
+  "1w9": {base_type: 1, adjacent_type: 9, expression: ["稳定", "克制", "客观"], decision: "先分析整体影响", relationship: "温和并重视和平", interaction: "理性讨论，避免情绪化推动"}
+  "1w2": {base_type: 1, adjacent_type: 2, expression: ["责任", "服务", "关怀"], decision: "考虑什么对大家更好", relationship: "主动指导并帮助成长", interaction: "认可责任和贡献"}
+  "2w1": {base_type: 2, adjacent_type: 1, expression: ["原则", "自律", "责任"], decision: "帮助是否真正有效", relationship: "温暖且有标准", interaction: "强调价值贡献和正向影响"}
+  "2w3": {base_type: 2, adjacent_type: 3, expression: ["表现力", "社交魅力", "成就感"], decision: "行动如何创造关系价值", relationship: "主动连接并希望被欣赏", interaction: "认可影响力与帮助"}
+  "3w2": {base_type: 3, adjacent_type: 2, expression: ["亲和", "社交", "服务"], decision: "选择有效且能获得支持的路径", relationship: "主动建立联系并展示价值", interaction: "强调成果、影响和贡献"}
+  "3w4": {base_type: 3, adjacent_type: 4, expression: ["独特", "专业", "个性"], decision: "追求高质量且有个人特色的成果", relationship: "希望独特价值被看见", interaction: "同时认可专业性和独特贡献"}
+  "4w3": {base_type: 4, adjacent_type: 3, expression: ["表达欲", "成就意识", "外显魅力"], decision: "选择能体现价值和特色的路径", relationship: "渴望欣赏和情感反馈", interaction: "认可独特性、创造和表达"}
+  "4w5": {base_type: 4, adjacent_type: 5, expression: ["理性", "内省", "深度"], decision: "寻找最符合真实自我的选择", relationship: "需要深度共鸣和个人空间", interaction: "适合深度对话，避免表面鼓励"}
+  "5w4": {base_type: 5, adjacent_type: 4, expression: ["创造", "独特", "审美"], decision: "寻找具有独特洞察的理解", relationship: "少量高质量深度连接", interaction: "提供深度分析和新视角"}
+  "5w6": {base_type: 5, adjacent_type: 6, expression: ["稳定", "谨慎", "系统"], decision: "通过信息收集和验证降低不确定", relationship: "以可靠性建立信任", interaction: "提供依据和分步骤分析"}
+  "6w5": {base_type: 6, adjacent_type: 5, expression: ["理性", "独立", "分析"], decision: "先分析最坏情况", relationship: "慢建立信任且重专业", interaction: "提供证据、结构和逻辑"}
+  "6w7": {base_type: 6, adjacent_type: 7, expression: ["活跃", "社交", "乐观"], decision: "确认安全后探索可能", relationship: "重视伙伴并共同面对", interaction: "提供支持、陪伴和实际方案"}
+  "7w6": {base_type: 7, adjacent_type: 6, expression: ["亲和", "合作", "责任"], decision: "寻找有趣且可靠的选择", relationship: "喜欢共同体验并重视伙伴", interaction: "提供多种可能并帮助聚焦"}
+  "7w8": {base_type: 7, adjacent_type: 8, expression: ["力量", "决断", "行动"], decision: "快速行动", relationship: "直接互动并重视自由", interaction: "提供机会、挑战和行动方案"}
+  "8w7": {base_type: 8, adjacent_type: 7, expression: ["外向", "行动", "冒险"], decision: "确认值得投入后快速推进", relationship: "主动连接并保护重要的人", interaction: "直接快速并面向结果"}
+  "8w9": {base_type: 8, adjacent_type: 9, expression: ["稳定", "沉着", "包容"], decision: "先观察整体局势再行动", relationship: "高忠诚且不喜无意义冲突", interaction: "尊重判断、边界和长期关系"}
+  "9w8": {base_type: 9, adjacent_type: 8, expression: ["坚定", "实际", "有边界"], decision: "保持和平同时保护自身利益", relationship: "温和但有底线", interaction: "尊重节奏并鼓励表达观点"}
+  "9w1": {base_type: 9, adjacent_type: 1, expression: ["原则", "责任", "理想"], decision: "选择符合整体利益的路径", relationship: "温和支持并维护良好氛围", interaction: "强调价值并提供稳定支持"}
+
+instinct_stacks:
+  "SP/SX":
+    primary: "SP"
+    secondary: "SX"
+    blind_spot: "SO"
+    attention_focus: ["个人安全", "稳定基础", "重要关系"]
+    resource_focus: ["现实资源", "少数重要的人和领域"]
+    relationship_style: "私密、深度、高忠诚"
+    social_strategy: "选择性参与"
+    interaction_adjustment: ["建立稳定感", "尊重私人空间", "深入交流"]
+    trust_path: ["持续回应", "可靠支持", "尊重边界"]
+  "SP/SO":
+    primary: "SP"
+    secondary: "SO"
+    blind_spot: "SX"
+    attention_focus: ["生活稳定", "现实资源", "群体位置"]
+    resource_focus: ["家庭", "工作", "社会角色"]
+    relationship_style: "稳定、可靠、长期维护"
+    social_strategy: "通过稳定角色建立归属"
+    interaction_adjustment: ["提供结构", "关注现实问题", "减少不确定"]
+    trust_path: ["实际帮助", "持续一致", "长期可靠"]
+  "SX/SP":
+    primary: "SX"
+    secondary: "SP"
+    blind_spot: "SO"
+    attention_focus: ["重要关系", "强烈体验", "安全边界"]
+    resource_focus: ["少数关系", "少数高投入目标"]
+    relationship_style: "高投入、高忠诚、强连接"
+    social_strategy: "选择性进入"
+    interaction_adjustment: ["真诚", "深度", "个性化回应"]
+    trust_path: ["专属感", "真实交流", "边界安全"]
+  "SX/SO":
+    primary: "SX"
+    secondary: "SO"
+    blind_spot: "SP"
+    attention_focus: ["重要关系", "人际吸引", "群体影响"]
+    resource_focus: ["关系网络", "特殊连接", "影响力"]
+    relationship_style: "强互动、希望产生影响"
+    social_strategy: "通过关系影响群体"
+    interaction_adjustment: ["有温度", "有互动感", "关注个人价值"]
+    trust_path: ["深度连接", "真实互动", "持续投入"]
+  "SO/SP":
+    primary: "SO"
+    secondary: "SP"
+    blind_spot: "SX"
+    attention_focus: ["群体关系", "社会角色", "现实资源"]
+    resource_focus: ["组织", "群体", "长期建设"]
+    relationship_style: "责任、稳定连接、共同目标"
+    social_strategy: "通过群体角色建立价值"
+    interaction_adjustment: ["认可贡献", "连接社会意义", "提供实际支持"]
+    trust_path: ["共同价值", "角色可靠", "现实支持"]
+  "SO/SX":
+    primary: "SO"
+    secondary: "SX"
+    blind_spot: "SP"
+    attention_focus: ["群体位置", "人际影响", "重要关系"]
+    resource_focus: ["人际网络", "社会影响", "关键关系"]
+    relationship_style: "连接他人并建立影响力"
+    social_strategy: "通过关键关系连接群体"
+    interaction_adjustment: ["认可影响力", "建立互动感", "讨论关系和价值"]
+    trust_path: ["共同意义", "关系回应", "认可贡献"]
+
+scene_adaptation:
+  emotional_support:
+    topics: ["emotion", "emotional_support", "stress", "情绪", "压力", "低落"]
+    role: "情绪承接者与可能性恢复伙伴"
+    priorities: ["先承接情绪", "不急于积极重构", "再恢复选择和行动"]
+    avoid: ["否定感受", "强行乐观", "过早建议"]
+  career_decision:
+    topics: ["career", "work", "职业", "工作", "决策"]
+    role: "方向澄清与小实验设计者"
+    priorities: ["澄清真实吸引", "比较可逆路径", "用小实验验证"]
+    avoid: ["替用户作不可逆决定", "只强调稳定或只强调热情"]
+  learning_growth:
+    topics: ["learning", "study", "学习", "成长"]
+    role: "探索窗口与深度周期教练"
+    priorities: ["保护兴趣", "缩小当前承诺", "建立反馈循环"]
+    avoid: ["刚性监督", "批评三分钟热度"]
+  intimate_relationship:
+    topics: ["relationship", "romantic", "亲密关系", "恋爱"]
+    role: "关系探索伙伴"
+    priorities: ["区分新鲜感和连接感", "探索关系现实基础", "支持共同成长"]
+    avoid: ["把感觉下降等同于不爱", "强迫承诺"]
+  family_companion:
+    topics: ["family", "家庭", "居家", "陪伴"]
+    role: "参与生活的关系伙伴"
+    priorities: ["延续记忆", "回应兴趣", "创造轻量共同体验"]
+    avoid: ["机械服务", "过度提醒", "责任施压"]
+  elder_companion:
+    topics: ["elder", "senior", "老年", "老人"]
+    role: "生活伙伴与记忆连接者"
+    priorities: ["主动邀请但不强迫", "激活生命经验价值", "促进现实人际连接"]
+    avoid: ["命令式健康提醒", "替代真实人际关系"]
+  youth_growth:
+    topics: ["youth", "child", "teen", "儿童", "青少年"]
+    role: "成长伙伴与探索引导者"
+    priorities: ["保护探索欲", "建立小承诺", "把想象转化为行动"]
+    avoid: ["过度评价", "刚性控制", "压制好奇心"]
+  social_support:
+    topics: ["friendship", "social", "朋友", "社交"]
+    role: "关系澄清与社交支持伙伴"
+    priorities: ["区分事实和解释", "尊重关系边界", "设计低压力沟通"]
+    avoid: ["替他人动机下结论", "鼓励过度追逐回应"]
+  entrepreneurship:
+    topics: ["entrepreneurship", "startup", "创业", "管理者"]
+    role: "机会聚焦与风险实验伙伴"
+    priorities: ["保留创新", "明确主线", "用低成本实验验证支线"]
+    avoid: ["同时推进所有可能", "用恐惧压制探索"]
+  health_management:
+    topics: ["health", "fitness", "健康", "运动", "生活方式"]
+    role: "可持续生活方式伙伴"
+    priorities: ["把任务转成可选择体验", "设置最小行动", "反馈身体真实感受"]
+    avoid: ["羞耻激励", "命令式要求", "忽视医疗边界"]
+
+maintenance:
+  identity_policy:
+    default_status: "unassigned"
+    dialogue_auto_inference: "forbidden"
+    update_requires:
+      - "用户明确声明、已授权外部测评或专家确认"
+      - "敏感推断授权"
+      - "画像版本匹配"
+      - "变更原因"
+    replacement: "新确认结果生成新画像版本并保留审计，不增量平均类型编号"
+    forgetting: "支持单独清除九型身份及其派生互动策略"
+  strategy_policy:
+    recompute_on: ["九型身份变更", "场景变更", "当前状态变更", "规则包发布"]
+    never_persist_as_fact:
+      - "场景策略"
+      - "本轮语言风格"
+      - "由九型派生的动机、恐惧和防御描述"
+    current_message_priority: "当前明确诉求高于类型策略"
+    explicit_preference_priority: "用户明确偏好高于类型策略"
+  confidence_policy:
+    user_supplied: 0.80
+    external_assessment: 0.85
+    expert_confirmed: 0.95
+    derived_layers_cap: 0.85
+    scene_strategy_cap: 0.75
