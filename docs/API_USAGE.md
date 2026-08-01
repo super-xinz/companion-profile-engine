@@ -38,6 +38,20 @@ conda run --no-capture-output -p ./.conda-env profile-engine
 
 检查：`curl http://localhost:8000/health`。Docker 本地入口也是 `http://localhost:8000`。Zeabur 地址由平台生成，不在代码中写死。
 
+首次启动后执行完整验收，而不是只看进程是否存在：
+
+```powershell
+.\scripts\smoke-test.ps1 -BaseUrl "http://127.0.0.1:8000" -ApiKey "local-development-key" -TenantId "test-tenant"
+```
+
+Linux/macOS：
+
+```bash
+PROFILE_API_KEY=local-development-key PROFILE_TENANT_ID=test-tenant ./scripts/smoke-test.sh http://127.0.0.1:8000
+```
+
+成功标准是脚本退出码为 0、数据库状态为 `ok`，并且偏好消息使画像版本从 v1 前进到 v2。默认 `PROFILE_SEMANTIC_EXTRACTOR=deterministic` 不依赖外部 LLM；只有改成 `qwen` 时才必须同时配置 `PROFILE_QWEN_API_KEY`、模型地址、模型名和外部语义处理授权。
+
 ## 3. 鉴权与公共 Header
 
 `GET /health`、页面和 OpenAPI 无需 API Key。所有核心 `/v1` 路由需要：

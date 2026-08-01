@@ -23,8 +23,9 @@ VERSION="$(printf '%s' "$PROFILE" | python -c 'import json,sys; print(json.load(
 echo "[3/4] ingest one turn"
 TURN_ID="turn-$STAMP"
 BODY="$(STAMP="$STAMP" TURN_ID="$TURN_ID" VERSION="$VERSION" python -c 'import datetime,json,os; print(json.dumps({"conversation_id":"session-"+os.environ["STAMP"],"message_id":os.environ["TURN_ID"],"expected_profile_version":int(os.environ["VERSION"]),"occurred_at":datetime.datetime.now(datetime.timezone.utc).isoformat(),"text":"以后回答短一点。","context":{"recent_turns":[]}},ensure_ascii=False))')"
-curl -fsS -H "$AUTH" -H "$TENANT" -H "Idempotency-Key: $TURN_ID" -H 'Content-Type: application/json' -d "$BODY" "$BASE_URL/v1/profiles/$USER_ID/messages:ingest" >/dev/null
+UPDATE="$(curl -fsS -H "$AUTH" -H "$TENANT" -H "Idempotency-Key: $TURN_ID" -H 'Content-Type: application/json' -d "$BODY" "$BASE_URL/v1/profiles/$USER_ID/messages:ingest")"
+printf '%s' "$UPDATE" | python -c 'import json,sys; d=json.load(sys.stdin); assert d["no_profile_change"] is False; assert d["profile_version"] > int(sys.argv[1])' "$VERSION"
 
 echo "[4/4] verify latest profile"
-curl -fsS -H "$AUTH" -H "$TENANT" "$BASE_URL/v1/profiles/$USER_ID" | python -c 'import json,sys; assert json.load(sys.stdin)["profile_version"] >= 1'
+curl -fsS -H "$AUTH" -H "$TENANT" "$BASE_URL/v1/profiles/$USER_ID" | python -c 'import json,sys; assert json.load(sys.stdin)["profile_version"] > int(sys.argv[1])' "$VERSION"
 echo "Smoke test passed: user=$USER_ID"
