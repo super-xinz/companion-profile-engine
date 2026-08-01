@@ -1,0 +1,100 @@
+{
+  "info": {
+    "name": "Companion Profile Engine + HIWM Chat",
+    "description": "真实画像核心 API 与 HIWM Chat BFF 请求。集合不含真实密钥。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "profileBaseUrl", "value": "http://localhost:8000" },
+    { "key": "chatBaseUrl", "value": "http://localhost:8283" },
+    { "key": "profileApiKey", "value": "local-development-key", "type": "secret" },
+    { "key": "tenantId", "value": "test-tenant" },
+    { "key": "userId", "value": "demo-xu" },
+    { "key": "sessionId", "value": "session-postman-001" },
+    { "key": "turnId", "value": "turn-postman-001" },
+    { "key": "accessCode", "value": "change-me", "type": "secret" },
+    { "key": "profileVersion", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": { "method": "GET", "url": "{{profileBaseUrl}}/health" }
+    },
+    {
+      "name": "Initialize profile",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "X-API-Key", "value": "{{profileApiKey}}", "type": "text" },
+          { "key": "X-Tenant-ID", "value": "{{tenantId}}" },
+          { "key": "Idempotency-Key", "value": "init-{{userId}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"tenant_user_id\": \"{{userId}}\",\n  \"display_name\": \"Postman Demo\",\n  \"consent\": {\"profile\": true, \"sensitive_inference\": false}\n}" },
+        "url": "{{profileBaseUrl}}/v1/profiles:init"
+      }
+    },
+    {
+      "name": "Read profile",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "X-API-Key", "value": "{{profileApiKey}}", "type": "text" },
+          { "key": "X-Tenant-ID", "value": "{{tenantId}}" }
+        ],
+        "url": "{{profileBaseUrl}}/v1/profiles/{{userId}}"
+      }
+    },
+    {
+      "name": "Ingest conversation turn",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "X-API-Key", "value": "{{profileApiKey}}", "type": "text" },
+          { "key": "X-Tenant-ID", "value": "{{tenantId}}" },
+          { "key": "Idempotency-Key", "value": "{{turnId}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"conversation_id\": \"{{sessionId}}\",\n  \"message_id\": \"{{turnId}}\",\n  \"expected_profile_version\": {{profileVersion}},\n  \"occurred_at\": \"2026-08-01T12:00:00Z\",\n  \"text\": \"以后回答短一点。\",\n  \"context\": {\"recent_turns\": []}\n}" },
+        "url": "{{profileBaseUrl}}/v1/profiles/{{userId}}/messages:ingest"
+      }
+    },
+    {
+      "name": "Reset test profile",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "X-API-Key", "value": "{{profileApiKey}}", "type": "text" },
+          { "key": "X-Tenant-ID", "value": "{{tenantId}}" },
+          { "key": "Idempotency-Key", "value": "reset-{{userId}}-manual" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": { "mode": "raw", "raw": "{\"confirm\": true, \"display_name\": \"Postman Demo\"}" },
+        "url": "{{profileBaseUrl}}/v1/profiles/{{userId}}:reset"
+      }
+    },
+    {
+      "name": "HIWM aggregate health",
+      "request": { "method": "GET", "url": "{{chatBaseUrl}}/api/health" }
+    },
+    {
+      "name": "HIWM access login",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"code\": \"{{accessCode}}\"}" },
+        "url": "{{chatBaseUrl}}/api/v1/access/login",
+        "description": "Postman 会自动保留服务端设置的 HttpOnly 会话 Cookie，后续聊天请求无需把口令放入 Header。"
+      }
+    },
+    {
+      "name": "HIWM complete profile-aware chat",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"session_id\": \"{{sessionId}}\",\n  \"turn_id\": \"{{turnId}}\",\n  \"message\": \"最近做决定时我总是想太久。\",\n  \"profile_enabled\": true\n}" },
+        "url": "{{chatBaseUrl}}/api/v1/companion/chat"
+      }
+    }
+  ]
+}
