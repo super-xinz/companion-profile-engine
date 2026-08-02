@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     allow_external_semantic_processing: bool = False
     demo_access_code: str | None = None
     demo_tenant_id: str = "demo-tenant"
+    demo_features_enabled: bool | None = None
+    api_docs_enabled: bool | None = None
+    allow_profile_reset: bool | None = None
+    rate_limit_per_minute: int = Field(default=120, ge=1, le=10_000)
     port: int = 8000
 
     @field_validator("database_url")
@@ -35,6 +39,60 @@ class Settings(BaseSettings):
         if value.startswith("postgresql://"):
             return "postgresql+psycopg://" + value.removeprefix("postgresql://")
         return value
+
+    @field_validator("environment", "semantic_extractor")
+    @classmethod
+    def normalize_mode(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+    @property
+    def demo_features_active(self) -> bool:
+        if self.demo_features_enabled is not None:
+            return self.demo_features_enabled
+        return not self.is_production
+
+    @property
+    def api_docs_active(self) -> bool:
+        if self.api_docs_enabled is not None:
+            return self.api_docs_enabled
+        return not self.is_production
+
+    @property
+    def profile_reset_active(self) -> bool:
+        if self.allow_profile_reset is not None:
+            return self.allow_profile_reset
+        return not self.is_production
+
+    def validate_runtime_configuration(self) -> None:
+        errors: list[str] = []
+        if self.environment not in {"development", "test", "production"}:
+            errors.append("PROFILE_ENVIRONMENT 必须是 development、test 或 production")
+        if self.semantic_extractor not in {"deterministic", "qwen"}:
+            errors.append("PROFILE_SEMANTIC_EXTRACTOR 必须是 deterministic 或 qwen")
+        if self.semantic_extractor == "qwen":
+            if not self.qwen_api_key:
+                errors.append("启用 qwen 时必须设置 PROFILE_QWEN_API_KEY")
+            if not self.allow_external_semantic_processing:
+                errors.append("启用 qwen 时必须明确设置 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true")
+        if self.is_production:
+            if not self.database_url.startswith("postgresql+psycopg://"):
+                errors.append("生产环境必须使用 PostgreSQL，禁止使用容器内 SQLite")
+            if not self.tenant_api_keys:
+                errors.append("生产环境必须配置 PROFILE_TENANT_API_KEYS")
+            weak_tenants = sorted(
+                tenant for tenant, key in self.tenant_api_keys.items()
+                if not tenant.strip() or len(key) < 24
+            )
+            if weak_tenants:
+                errors.append(f"以下租户 API Key 必须至少 24 个字符: {weak_tenants}")
+            if self.demo_features_active and not self.demo_access_code:
+                errors.append("生产环境启用 Demo/规则工作台时必须设置 PROFILE_DEMO_ACCESS_CODE")
+        if errors:
+            raise RuntimeError("生产配置检查失败: " + "; ".join(errors))
 
 
 @lru_cache

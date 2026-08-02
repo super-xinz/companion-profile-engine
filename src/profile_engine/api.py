@@ -5,12 +5,16 @@ import hmac
 import json
 import logging
 import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from importlib.resources import files
+from math import ceil
 from pathlib import Path
+from threading import Lock
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, Security
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete, desc, select, text
 from sqlalchemy.orm import Session
@@ -31,6 +35,7 @@ from .service import (ConsentError, NotFoundError, VersionConflictError, correct
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    get_settings().validate_runtime_configuration()
     init_db()
     with SessionLocal() as db:
         # A rule published from the expert workspace is the production source
@@ -49,11 +54,15 @@ async def lifespan(app: FastAPI):
     yield
 
 
+_startup_settings = get_settings()
 app = FastAPI(
     title="陪伴机器人真人画像引擎",
-    version="0.2.0",
+    version="0.3.0",
     description="可审计、可更正、可遗忘的真人用户画像状态机。",
     lifespan=lifespan,
+    docs_url="/docs" if _startup_settings.api_docs_active else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if _startup_settings.api_docs_active else None,
 )
 app.include_router(demo_router)
 app.include_router(workspace_router)
@@ -70,6 +79,15 @@ async def attach_request_id(request: Request, call_next):
     request.state.request_id = req_id
     response = await call_next(request)
     response.headers["X-Request-ID"] = req_id
+    response.headers["X-API-Version"] = "1"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.path.startswith(("/v1", "/demo/api")):
+        response.headers["Cache-Control"] = "no-store"
+    if get_settings().is_production:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     logger.info(json.dumps({
         "timestamp": time.time(),
         "level": "info",
@@ -114,14 +132,47 @@ def _error(request: Request, status: int, code: str, message: str, details: dict
         "code": code, "message": message, "details": details or {}})
 
 
+class SlidingWindowRateLimiter:
+    def __init__(self) -> None:
+        self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._lock = Lock()
+
+    def check(self, tenant_id: str, limit: int, now: float | None = None) -> tuple[bool, int, int]:
+        current = time.monotonic() if now is None else now
+        cutoff = current - 60
+        with self._lock:
+            hits = self._hits[tenant_id]
+            while hits and hits[0] <= cutoff:
+                hits.popleft()
+            if len(hits) >= limit:
+                retry_after = max(1, ceil(60 - (current - hits[0])))
+                return False, 0, retry_after
+            hits.append(current)
+            return True, max(0, limit - len(hits)), 0
+
+
+_api_key_header = APIKeyHeader(name="X-API-Key", scheme_name="TenantApiKey", auto_error=False)
+_rate_limiter = SlidingWindowRateLimiter()
+
+
 def auth_context(
-    x_api_key: str = Header(alias="X-API-Key"),
+    response: Response,
+    x_api_key: str | None = Security(_api_key_header),
     x_tenant_id: str = Header(alias="X-Tenant-ID", min_length=1, max_length=128),
 ) -> str:
     settings = get_settings()
     expected = settings.tenant_api_keys.get(x_tenant_id, settings.api_key if settings.environment == "development" else "")
-    if not expected or not hmac.compare_digest(x_api_key, expected):
-        raise HTTPException(status_code=401, detail="invalid API key")
+    if not x_api_key or not expected or not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=401, detail="invalid API key", headers={"WWW-Authenticate": "ApiKey"})
+    allowed, remaining, retry_after = _rate_limiter.check(x_tenant_id, settings.rate_limit_per_minute)
+    response.headers["X-RateLimit-Limit"] = str(settings.rate_limit_per_minute)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="tenant rate limit exceeded",
+            headers={"Retry-After": str(retry_after)},
+        )
     return x_tenant_id
 
 
@@ -157,35 +208,56 @@ def _cache(db: Session, tenant_id: str, key: str, body: object, response: dict) 
     db.commit()
 
 
-@app.get("/health", tags=["system"])
-def health() -> dict:
+def _health_response() -> JSONResponse:
     database = "ok"
     try:
         with SessionLocal() as db:
             db.execute(text("SELECT 1"))
     except Exception:
         database = "unavailable"
-    return {
+    payload = {
         "status": "ok" if database == "ok" else "degraded",
         "service": "companion-profile-engine",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "services": {"application": "ok", "database": database},
     }
+    return JSONResponse(status_code=200 if database == "ok" else 503, content=payload)
+
+
+@app.get("/health", tags=["system"])
+def health() -> JSONResponse:
+    return _health_response()
+
+
+@app.get("/livez", tags=["system"], include_in_schema=False)
+def liveness() -> dict:
+    return {"status": "ok", "service": "companion-profile-engine", "version": "0.3.0"}
+
+
+@app.get("/readyz", tags=["system"], include_in_schema=False)
+def readiness() -> JSONResponse:
+    return _health_response()
 
 
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
-    return RedirectResponse(url="/demo", status_code=307)
+    settings = get_settings()
+    target = "/demo" if settings.demo_features_active else ("/docs" if settings.api_docs_active else "/health")
+    return RedirectResponse(url=target, status_code=307)
 
 
 @app.get("/demo", response_class=HTMLResponse, include_in_schema=False)
 def demo_page() -> HTMLResponse:
+    if not get_settings().demo_features_active:
+        raise HTTPException(status_code=404, detail="Demo 功能未启用")
     html = files("profile_engine").joinpath("static/demo.html").read_text(encoding="utf-8")
     return HTMLResponse(html)
 
 
 @app.get("/rules", response_class=HTMLResponse, include_in_schema=False)
 def rules_page() -> HTMLResponse:
+    if not get_settings().demo_features_active:
+        raise HTTPException(status_code=404, detail="规则工作台未启用")
     html = files("profile_engine").joinpath("static/rules.html").read_text(encoding="utf-8")
     return HTMLResponse(html)
 
@@ -282,6 +354,8 @@ def reset_profile(
     idem: str = Depends(idempotency_key),
     db: Session = Depends(get_db),
 ) -> dict:
+    if not get_settings().profile_reset_active:
+        raise HTTPException(status_code=404, detail="画像重置功能未启用")
     cached = _cached(db, tenant_id, idem, body)
     if cached:
         return cached
@@ -324,3 +398,32 @@ def rule_pack_current(request: Request, tenant_id: str = Depends(auth_context), 
     pack = current_pack(request, db)
     return {"version": pack.version, "sha256": pack.sha256, "status": pack.status,
             "validation_report": pack.validation_report, "published_at": pack.published_at}
+
+
+@app.get("/v1/capabilities", tags=["system"])
+def capabilities(request: Request, tenant_id: str = Depends(auth_context), db: Session = Depends(get_db)) -> dict:
+    settings = get_settings()
+    pack = current_pack(request, db)
+    schema_version = pack.canonical_json.get("schema", {}).get("schema_version")
+    return {
+        "service": "companion-profile-engine",
+        "service_version": "0.3.0",
+        "api_version": "v1",
+        "tenant_id": tenant_id,
+        "profile_schema_version": schema_version,
+        "rule_pack": {"version": pack.version, "sha256": pack.sha256, "status": pack.status},
+        "features": {
+            "profile_versions": True,
+            "idempotent_writes": True,
+            "profile_explanations": True,
+            "explicit_corrections": True,
+            "forget_requests": True,
+            "enneagram_requires_explicit_source": True,
+            "profile_reset": settings.profile_reset_active,
+        },
+        "limits": {
+            "requests_per_minute": settings.rate_limit_per_minute,
+            "message_characters": 4000,
+            "recent_turns": 12,
+        },
+    }

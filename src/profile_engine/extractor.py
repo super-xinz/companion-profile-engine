@@ -127,6 +127,10 @@ trait_signals 只能引用用户消息中有直接证据支持的现有画像维
 target_trait, direction(increase|decrease), strength(0到1), confidence(0到1),
 evidence_scope(explicit_self_report|repeated_behavior|single_behavior_inference), supporting_span, rationale。
 规则：最多4项；知识问答、身份事实、别人行为、引用、假设和单纯短期状态不得推断长期人格；不要为了产生变化而强行输出。
+用户对机器人回复方式的要求（例如“回答短一点”“先听我说完”“别开玩笑”）属于交互偏好，绝不能据此生成
+assertiveness、confidence、empathy 或任何其他长期人格 trait_signal；设置边界也不能被当成高果断性或高自信。
+每个 trait_signal 必须能对应到 frames 中同一原文片段的 user + asserted 长期习惯、自我评价或真实行为帧；
+如果只有 preference、communication_behavior、emotion、event 或 identity_fact 帧，则 trait_signals 必须为空。
 同一句话可以影响多个维度，但必须逐项说明依据。画像维度目录会随请求提供，禁止创造目录外字段。
 
 reply_guidance 必须包含：intent, tone, empathy_first, answer_first, max_sentences(1到8),

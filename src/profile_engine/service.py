@@ -43,16 +43,6 @@ class ConsentError(Exception):
     pass
 
 
-TRAIT_ROUTES = {
-    "socializing_requires_solitude_recovery": [("extroversion", -1, "用户描述社交后需要独处恢复")],
-    "likes_social_gathering": [("extroversion", 1, "用户表达对社交活动的稳定偏好")],
-    "prefers_planning": [("structure_pref", 1, "用户表达计划偏好")],
-    "uses_data_for_decisions": [("thinking_ratio", 1, "用户描述以数据辅助决策")],
-}
-
-FREQUENCY_FACTORS = {"once": 0.25, "sometimes": 0.45, "often": 0.70, "usually": 0.85, "always": 1.0, "never": 1.0, "unknown": 0.40}
-
-
 def request_id() -> str:
     return f"req_{uuid.uuid4().hex}"
 
@@ -273,62 +263,72 @@ def _trait_path(profile: dict, trait: str) -> str:
     raise KeyError(trait)
 
 
-def _evidence_type(frame: SemanticFrame) -> tuple[str, float, float]:
-    if frame.temporal_scope == "habitual" or frame.frequency in {"often", "usually", "always", "never"}:
-        return "explicit_self_report", 0.90, 0.06
-    return "single_behavior_inference", 0.35, 0.02
-
-
-def _apply_trait_frame(db: Session, user: User, profile: dict, frame: SemanticFrame, message_id: str, conversation_id: str) -> tuple[list[dict], list[str]]:
-    patches, evidence_ids = [], []
-    if frame.subject != "user" or frame.modality in {"hypothetical", "quoted"}:
-        return patches, evidence_ids
-    frequency = FREQUENCY_FACTORS[frame.frequency]
-    for trait, base_direction, reason in TRAIT_ROUTES.get(frame.predicate, []):
-        direction = -base_direction if frame.negated else base_direction
-        existing = db.scalars(select(ProfileEvidence).where(ProfileEvidence.user_id == user.id,
-            ProfileEvidence.target_path.like(f"%{trait}"), ProfileEvidence.invalidated.is_(False))).all()
-        source_type, reliability, max_delta = _evidence_type(frame)
-        prior_sessions = {x.factors.get("conversation_id") for x in existing if x.rule_id == f"DIALOGUE-{frame.predicate}-{trait}" and x.factors.get("conversation_id")}
-        if source_type == "single_behavior_inference" and conversation_id not in prior_sessions and len(prior_sessions) >= 2:
-            source_type, reliability, max_delta = "repeated_behavior", 0.75, 0.04
-        independence = 0.5 if conversation_id in prior_sessions else 1.0
-        factors = {"reliability": reliability, "explicitness": frame.explicitness, "frequency": frequency,
-                   "context_relevance": 1.0, "freshness": 1.0, "independence": independence, "rule_weight": 1.0,
-                   "conversation_id": conversation_id}
-        impact = 1.0
-        for key in ("reliability", "explicitness", "frequency", "context_relevance", "freshness", "independence", "rule_weight"):
-            impact *= factors[key]
-        entry = find_trait(profile, trait)
-        before, conf_before = entry["value"], entry["confidence"]
-        delta = min(max_delta, max_delta * impact)
-        after = min(1.0, max(0.0, before + direction * delta))
-        new_conf = 1 - (1 - conf_before) * (1 - impact)
-        opposite = sum(abs(x.impact) for x in existing if x.direction and x.direction != direction)
-        same = sum(abs(x.impact) for x in existing if x.direction == direction)
-        conflict_ratio = min(opposite, same + impact) / max(opposite + same + impact, 1e-9)
-        new_conf *= 1 - conflict_ratio * 0.5
-        evidence = ProfileEvidence(user_id=user.id, source_type=source_type, source_message_id=message_id,
-            semantic_frame=frame.model_dump(), target_path=_trait_path(profile, trait), direction=direction,
-            base_delta=max_delta, impact=impact, factors=factors, rule_id=f"DIALOGUE-{frame.predicate}-{trait}", reason=reason)
-        db.add(evidence)
-        db.flush()
-        entry.update(value=round(after, 4), confidence=round(new_conf, 4), updated_at=datetime.now(timezone.utc).isoformat())
-        entry["evidence_refs"] = [*entry.get("evidence_refs", []), evidence.id]
-        patches.append({"field": _trait_path(profile, trait), "before": before, "after": round(after, 4),
-                        "confidence_before": conf_before, "confidence_after": round(new_conf, 4)})
-        evidence_ids.append(evidence.id)
-    return patches, evidence_ids
-
-
 def _trait_catalog(profile: dict) -> dict[str, dict]:
     return {key: {"label": TRAIT_NAMES.get(key, key), "current_value": value["value"],
                   "current_confidence": value["confidence"]}
             for key, value in flattened_traits(profile).items()}
 
 
+def _spans_overlap(left: str, right: str) -> bool:
+    left, right = left.strip(), right.strip()
+    return bool(left and right and (left in right or right in left))
+
+
+def _trait_signal_rejection(
+    signal: TraitSignal,
+    source_text: str,
+    frames: list[SemanticFrame],
+    dialogue_rules: dict,
+) -> str | None:
+    policy = dialogue_rules.get("model_candidate_validation", {})
+    if signal.target_trait not in dialogue_rules.get("trait_mapping_rules", {}):
+        return "target_not_in_published_trait_rules"
+    if signal.confidence < float(policy.get("minimum_confidence", 0.60)):
+        return "confidence_below_threshold"
+    if policy.get("require_supporting_span_verbatim", True) and signal.supporting_span not in source_text:
+        return "supporting_span_not_in_message"
+
+    matching = [frame for frame in frames if _spans_overlap(signal.supporting_span, frame.supporting_span)]
+    if policy.get("require_matching_semantic_frame", True) and not matching:
+        return "missing_matching_semantic_frame"
+
+    preference_predicates = set(
+        dialogue_rules.get("runtime_state_and_memory", {}).get("interaction_preferences", {})
+    )
+    forbidden_domains = set(policy.get("forbidden_trait_domains", []))
+    if policy.get("interaction_preference_spans_cannot_update_traits", True) and any(
+        frame.predicate in preference_predicates
+        or frame.semantic_domain in {"preference", "communication_behavior"}
+        for frame in matching
+    ):
+        return "interaction_preference_cannot_update_long_term_trait"
+    if any(frame.semantic_domain in forbidden_domains for frame in matching):
+        return "semantic_domain_forbidden_for_long_term_trait"
+
+    eligible_subjects = set(policy.get("trait_eligible_subjects", ["user"]))
+    eligible_modalities = set(policy.get("trait_eligible_modalities", ["asserted"]))
+    eligible_domains = set(policy.get("trait_eligible_domains", []))
+    eligible = [
+        frame for frame in matching
+        if frame.subject in eligible_subjects
+        and frame.modality in eligible_modalities
+        and (not eligible_domains or frame.semantic_domain in eligible_domains)
+    ]
+    if not eligible:
+        return "no_trait_eligible_semantic_frame"
+    if signal.evidence_scope == "explicit_self_report" and not any(
+        frame.semantic_domain == "self_evaluation"
+        or frame.temporal_scope in {"habitual", "historical"}
+        or frame.frequency in {"often", "usually", "always", "never"}
+        for frame in eligible
+    ):
+        return "explicit_self_report_requires_stable_or_habitual_frame"
+    return None
+
+
 def _apply_trait_signal(db: Session, user: User, profile: dict, signal: TraitSignal, source_text: str,
-                        message_id: str, conversation_id: str) -> tuple[dict | None, str | None, str | None]:
+                        message_id: str, conversation_id: str, frames: list[SemanticFrame],
+                        dialogue_rules: dict) -> tuple[dict | None, str | None, str | None]:
     traits = flattened_traits(profile)
     if signal.target_trait not in traits:
         return None, None, "target_not_in_profile_schema"
@@ -340,13 +340,19 @@ def _apply_trait_signal(db: Session, user: User, profile: dict, signal: TraitSig
     ))
     if locked:
         return None, None, "locked_by_manual_override"
-    if signal.confidence < 0.60:
-        return None, None, "confidence_below_threshold"
-    if signal.supporting_span not in source_text:
-        return None, None, "supporting_span_not_in_message"
-    caps = {"explicit_self_report": .06, "repeated_behavior": .04, "single_behavior_inference": .02}
-    reliability = {"explicit_self_report": .90, "repeated_behavior": .75, "single_behavior_inference": .35}
-    cap = caps[signal.evidence_scope]
+    rejection = _trait_signal_rejection(signal, source_text, frames, dialogue_rules)
+    if rejection:
+        return None, None, rejection
+    evidence_types = dialogue_rules.get("evidence_types", {})
+    evidence_spec = evidence_types.get(signal.evidence_scope)
+    if not evidence_spec:
+        return None, None, "unknown_evidence_scope"
+    update_math = dialogue_rules.get("update_math", {})
+    cap = min(
+        float(evidence_spec.get("max_trait_delta", 0)),
+        float(update_math.get("same_message_same_target_cap", 0.06)),
+    )
+    reliability = float(evidence_spec.get("base_reliability", 0))
     rule_id = f"MODEL-SCHEMA-{signal.target_trait}"
     existing = db.scalars(select(ProfileEvidence).where(
         ProfileEvidence.user_id == user.id,
@@ -355,12 +361,19 @@ def _apply_trait_signal(db: Session, user: User, profile: dict, signal: TraitSig
     )).all()
     prior_sessions = {x.factors.get("conversation_id") for x in existing
                       if x.rule_id == rule_id and x.factors.get("conversation_id")}
+    if signal.evidence_scope == "repeated_behavior":
+        minimum_sessions = int(evidence_spec.get("minimum_independent_sessions", 3))
+        independent_sessions = len(prior_sessions | {conversation_id})
+        if independent_sessions < minimum_sessions:
+            return None, None, "insufficient_independent_sessions_for_repeated_behavior"
     independence = 0.5 if conversation_id in prior_sessions else 1.0
-    impact = reliability[signal.evidence_scope] * signal.confidence * signal.strength * independence
+    impact = reliability * signal.confidence * signal.strength * independence
     direction = 1 if signal.direction == "increase" else -1
     entry = traits[signal.target_trait]
     before, conf_before = entry["value"], entry["confidence"]
     delta = min(cap, cap * impact)
+    if delta < float(update_math.get("no_op_threshold", 0.01)):
+        return None, None, "effect_below_no_op_threshold"
     after = min(1.0, max(0.0, before + direction * delta))
     new_conf = 1 - (1 - conf_before) * (1 - impact)
     opposite = sum(abs(x.impact) for x in existing if x.direction and x.direction != direction)
@@ -372,7 +385,7 @@ def _apply_trait_signal(db: Session, user: User, profile: dict, signal: TraitSig
         semantic_frame={"type": "trait_signal", **signal.model_dump()},
         target_path=target_path, direction=direction,
         base_delta=cap, impact=impact,
-        factors={"reliability": reliability[signal.evidence_scope], "model_confidence": signal.confidence,
+        factors={"reliability": reliability, "model_confidence": signal.confidence,
                  "model_strength": signal.strength, "independence": independence,
                  "conversation_id": conversation_id},
         rule_id=rule_id, reason=signal.rationale,
@@ -419,17 +432,15 @@ def _apply_identity_fact(db: Session, user: User, profile: dict, frame: Semantic
     return True, operation
 
 
-def _apply_runtime_frame(db: Session, user: User, profile: dict, frame: SemanticFrame, message_id: str) -> tuple[bool, list[dict]]:
+def _apply_runtime_frame(db: Session, user: User, profile: dict, frame: SemanticFrame, message_id: str,
+                         dialogue_rules: dict) -> tuple[bool, list[dict]]:
     changed, records = False, []
     if frame.subject != "user":
         return changed, records
-    pref_map = {
-        "prefers_short_responses": ("response_length", "short"),
-        "needs_empathy_before_advice": ("empathy_first", 1.0),
-        "dislikes_humor": ("humor_level", 0.0),
-    }
-    if frame.predicate in pref_map:
-        key, value = pref_map[frame.predicate]
+    runtime_rules = dialogue_rules.get("runtime_state_and_memory", {})
+    preference_spec = runtime_rules.get("interaction_preferences", {}).get(frame.predicate)
+    if preference_spec:
+        key, value = preference_spec["target"], preference_spec["value"]
         existing = db.scalar(select(RuntimePreference).where(RuntimePreference.user_id == user.id, RuntimePreference.preference_key == key))
         if existing:
             existing.value, existing.source_message_id = {"value": value, "explicit": True}, message_id
@@ -437,23 +448,39 @@ def _apply_runtime_frame(db: Session, user: User, profile: dict, frame: Semantic
             db.add(RuntimePreference(user_id=user.id, preference_key=key, value={"value": value, "explicit": True}, source_message_id=message_id))
         profile["runtime"]["interaction_preferences"][key] = value
         changed, records = True, [{"operation": "SET_INTERACTION_PREFERENCE", "field": key, "value": value}]
-    state_map = {"low_energy": ("energy_level", 0.2, 12), "high_stress": ("stress_level", 0.85, 24)}
-    if frame.predicate in state_map and frame.temporal_scope in {"now", "recent", "unknown"}:
-        key, value, hours = state_map[frame.predicate]
+    state_spec = next((
+        (key, spec) for key, spec in runtime_rules.get("current_state", {}).items()
+        if isinstance(spec, dict) and frame.predicate in spec.get("predicates", [])
+    ), None)
+    if state_spec and frame.temporal_scope in {"now", "recent", "unknown"}:
+        key, spec = state_spec
+        value, hours = float(spec["value"]), int(spec["ttl_hours"])
         expires = datetime.now(timezone.utc) + timedelta(hours=hours)
-        db.add(CurrentState(user_id=user.id, state_key=key, value={"value": value}, source_message_id=message_id, expires_at=expires))
+        existing_state = db.scalar(select(CurrentState).where(
+            CurrentState.user_id == user.id,
+            CurrentState.state_key == key,
+        ).order_by(desc(CurrentState.created_at)).limit(1))
+        if existing_state:
+            existing_state.value = {"value": value}
+            existing_state.source_message_id = message_id
+            existing_state.expires_at = expires
+        else:
+            db.add(CurrentState(user_id=user.id, state_key=key, value={"value": value}, source_message_id=message_id, expires_at=expires))
         profile["runtime"]["current_state"][key] = {"value": value, "expires_at": expires.isoformat()}
         changed, records = True, records + [{"operation": "SET_STATE", "field": key, "value": value, "expires_at": expires.isoformat()}]
     return changed, records
 
 
-def _reply_hints(profile: dict, interaction_strategy: dict | None = None) -> dict:
+def _reply_hints(profile: dict, interaction_strategy: dict | None = None) -> tuple[dict, set[str]]:
     prefs = profile["runtime"].get("interaction_preferences", {})
     states = profile["runtime"].get("current_state", {})
+    locked_fields: set[str] = set()
     hints: dict[str, Any] = {"max_sentences": 5, "answer_first": False, "empathy_first": False,
                              "question_count": 1, "structure_level": "simple", "humor_level": prefs.get("humor_level", 0.2)}
     if interaction_strategy:
-        hints.update(interaction_strategy.get("hints", {}))
+        strategy_hints = interaction_strategy.get("hints", {})
+        hints.update(strategy_hints)
+        locked_fields.update(strategy_hints)
         hints["enneagram_strategy"] = {
             key: value for key, value in interaction_strategy.items()
             if key not in {"hints", "precedence"}
@@ -461,23 +488,30 @@ def _reply_hints(profile: dict, interaction_strategy: dict | None = None) -> dic
         hints["strategy_precedence"] = interaction_strategy.get("precedence", [])
     if prefs.get("response_length") == "short":
         hints.update(max_sentences=3, answer_first=True)
+        locked_fields.update({"max_sentences", "answer_first"})
     if prefs.get("empathy_first", 0) >= 0.67:
         hints.update(empathy_first=True, ask_support_or_solution=True)
+        locked_fields.update({"empathy_first", "ask_support_or_solution"})
     if states.get("stress_level", {}).get("value", 0) >= 0.7:
         hints.update(max_sentences=3, empathy_first=True, humor_level=0.0)
+        locked_fields.update({"max_sentences", "empathy_first", "question_count", "humor_level"})
     if states.get("energy_level", {}).get("value", 1) <= 0.3:
         hints.update(structure_level="simple", action_count=1, allow_resume_later=True)
+        locked_fields.update({"structure_level", "action_count", "allow_resume_later"})
     structure = find_trait(profile, "structure_pref")["value"]
     if structure >= 0.67:
         hints.update(structure_level="steps", options_max=3)
+        locked_fields.update({"structure_level", "options_max"})
     elif structure <= 0.33:
         hints.update(structure_level="flexible_options", avoid_rigid_plan=True)
+        locked_fields.update({"structure_level", "avoid_rigid_plan"})
     if profile["meta"]["overall_confidence"] < 0.4:
         hints.update(use_tentative_language=True, calibration_question_count=1)
-    return hints
+        locked_fields.update({"use_tentative_language", "calibration_question_count"})
+    return hints, locked_fields
 
 
-def _merge_reply_guidance(profile_hints: dict, guidance: ReplyGuidance) -> dict:
+def _merge_reply_guidance(profile_hints: dict, guidance: ReplyGuidance, locked_fields: set[str]) -> dict:
     merged = dict(profile_hints)
     merged.update(
         intent=guidance.intent,
@@ -485,14 +519,18 @@ def _merge_reply_guidance(profile_hints: dict, guidance: ReplyGuidance) -> dict:
         focus=guidance.focus,
         avoid=guidance.avoid,
         requires_fresh_information=guidance.requires_fresh_information,
-        question_count=guidance.question_count,
     )
     merged["empathy_first"] = bool(profile_hints.get("empathy_first") or guidance.empathy_first)
     merged["answer_first"] = bool(profile_hints.get("answer_first") or guidance.answer_first)
     merged["max_sentences"] = min(profile_hints.get("max_sentences", 5), guidance.max_sentences)
-    if profile_hints.get("structure_level") == "simple":
+    if "question_count" not in locked_fields:
+        merged["question_count"] = guidance.question_count
+    if "structure_level" not in locked_fields:
         merged["structure_level"] = guidance.structure_level
+    for field in {"empathy_first", "answer_first", "max_sentences"} & locked_fields:
+        merged[field] = profile_hints[field]
     merged["strategy_sources"] = ["current_message_model_guidance", "current_profile", "runtime_state_and_preferences"]
+    merged["rule_locked_fields"] = sorted(locked_fields)
     return merged
 
 
@@ -512,12 +550,14 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
         recent_turns=[turn.model_dump() for turn in body.context.recent_turns],
     )
     frames = analysis.frames
+    dialogue_rules = pack.canonical_json["dialogue"]
     patches, evidence_ids, runtime_operations = [], [], []
     accepted_trait_signals, rejected_trait_signals = [], []
     runtime_changed = False
     for signal in analysis.trait_signals:
         patch, evidence_id, rejection = _apply_trait_signal(
             db, user, profile, signal, body.text, body.message_id, body.conversation_id,
+            frames, dialogue_rules,
         )
         if rejection:
             rejected_trait_signals.append({**signal.model_dump(), "rejection_reason": rejection})
@@ -528,7 +568,7 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
         if evidence_id:
             evidence_ids.append(evidence_id)
     for frame in frames:
-        changed, operations = _apply_runtime_frame(db, user, profile, frame, body.message_id)
+        changed, operations = _apply_runtime_frame(db, user, profile, frame, body.message_id, dialogue_rules)
         runtime_changed |= changed
         runtime_operations.extend(operations)
         fact_changed, fact_operation = _apply_identity_fact(db, user, profile, frame, body.message_id)
@@ -543,14 +583,17 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
             runtime_changed = True
             runtime_operations.append({"operation": "UPSERT_MEMORY", "memory_id": memory.id})
 
+    update_math = dialogue_rules.get("update_math", {})
+    maximum_total_change = float(update_math.get("maximum_total_trait_change_per_turn", 0.10))
     total_trait_change = sum(abs(x["after"] - x["before"]) for x in patches)
-    if total_trait_change > 0.10:
-        ratio = 0.10 / total_trait_change
+    if total_trait_change > maximum_total_change:
+        ratio = maximum_total_change / total_trait_change
         for patch in patches:
             patch["after"] = round(patch["before"] + (patch["after"] - patch["before"]) * ratio, 4)
             parent, key = _resolve_path(profile, patch["field"])
             parent[key]["value"] = patch["after"]
-    material_trait_change = any(abs(x["after"] - x["before"]) >= 0.01 for x in patches)
+    no_op_threshold = float(update_math.get("no_op_threshold", 0.01))
+    material_trait_change = any(abs(x["after"] - x["before"]) >= no_op_threshold for x in patches)
     if material_trait_change:
         derived = rebuild_derived(profile, pack.canonical_json["schema"])
     else:
@@ -577,7 +620,8 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
         pack.canonical_json.get("enneagram", {}),
         body.context.topic,
     )
-    reply_hints = _merge_reply_guidance(_reply_hints(profile, interaction_strategy), analysis.reply_guidance)
+    profile_hints, locked_fields = _reply_hints(profile, interaction_strategy)
+    reply_hints = _merge_reply_guidance(profile_hints, analysis.reply_guidance, locked_fields)
     return {"request_id": req_id, "profile_version": new_no, "rule_pack": _pack_summary(pack),
             "semantic_extractor_version": extractor.version, "semantic_frames": [f.model_dump() for f in frames], "evidence": evidence_response,
             "candidate_trait_signals": [signal.model_dump() for signal in analysis.trait_signals],
@@ -648,7 +692,11 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
         if not isinstance(body.value, (float, int)) or not 0 <= body.value <= 1:
             raise ValueError("核心维度更正值必须在0到1之间")
         old_value = old["value"]
-        applied_value = round(max(old_value - 0.10, min(old_value + 0.10, float(body.value))), 4)
+        correction_cap = float(
+            pack.canonical_json["dialogue"].get("evidence_types", {})
+            .get("explicit_correction", {}).get("max_trait_delta", 0.10)
+        )
+        applied_value = round(max(old_value - correction_cap, min(old_value + correction_cap, float(body.value))), 4)
         evidence = ProfileEvidence(user_id=user.id, source_type="explicit_correction", target_path=body.target_path,
             direction=1 if applied_value > old_value else (-1 if applied_value < old_value else 0), base_delta=abs(applied_value-old_value), impact=1.0,
             factors={"reliability": 1.0, "explicitness": 1.0}, rule_id="USER-EXPLICIT-CORRECTION", reason=body.reason)

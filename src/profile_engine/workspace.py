@@ -20,6 +20,7 @@ from .models import (AuditLog, ChatMessage, Conversation, ManualOverride, Memory
                      ProfileEvidence, ProfileVersion, RulePack, RuleRevision,
                      TeamMember, User)
 from .profile import TRAIT_NAMES, clone_profile, flattened_traits, rebuild_derived, recalculate_meta
+from .rule_compiler import validate_rule_references
 from .schemas import (Consent, EnneagramIdentityInput, ProfileInitRequest,
                       SetEnneagramRequest)
 from .service import (_audit, _resolve_path, current_version, explain_profile, find_user,
@@ -447,12 +448,7 @@ def _validate_rules(canonical: dict) -> dict:
             errors.append(f"{name}规则目标结构不兼容：{rules.get('target_schema')}")
     if len(traits) != 17 or len(set(traits)) != 17:
         errors.append(f"核心画像维度应为 17 个，当前为 {len(set(traits))} 个")
-    missing = sorted(set(traits) - set(mappings))
-    unknown = sorted(set(mappings) - set(traits))
-    if missing:
-        errors.append(f"对话规则缺少 {len(missing)} 个画像维度引用：{', '.join(missing[:6])}")
-    if unknown:
-        errors.append(f"对话规则引用了未知画像维度：{', '.join(unknown[:6])}")
+    errors.extend(validate_rule_references(schema, dialogue))
     signals = cold.get("semantic_signal_extraction", {}).get("generalized_signal_dictionary", {})
     for signal_id, signal in signals.items():
         for target, direction in signal.get("effects", {}).items():

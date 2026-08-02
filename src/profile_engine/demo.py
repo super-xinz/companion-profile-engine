@@ -46,6 +46,8 @@ class DemoChatRequest(BaseModel):
 
 def demo_auth(x_demo_code: str = Header(alias="X-Demo-Code")) -> str:
     settings = get_settings()
+    if not settings.demo_features_active:
+        raise HTTPException(status_code=404, detail="Demo 功能未启用")
     expected = settings.demo_access_code
     if not expected and settings.environment == "development":
         expected = "demo"

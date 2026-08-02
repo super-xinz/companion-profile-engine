@@ -1,9 +1,11 @@
 import uuid
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
-from profile_engine.api import app
+from profile_engine.api import SlidingWindowRateLimiter, app
+from profile_engine.config import Settings
 
 
 HEADERS = {"X-API-Key": "local-development-key", "X-Tenant-ID": "test-tenant"}
@@ -11,6 +13,59 @@ HEADERS = {"X-API-Key": "local-development-key", "X-Tenant-ID": "test-tenant"}
 
 def idem(value: str) -> dict:
     return {**HEADERS, "Idempotency-Key": value}
+
+
+def test_b2b_capabilities_security_headers_and_api_key_challenge():
+    with TestClient(app) as client:
+        response = client.get("/v1/capabilities", headers=HEADERS)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["api_version"] == "v1"
+        assert body["service_version"] == "0.3.0"
+        assert body["limits"]["requests_per_minute"] >= 1
+        assert response.headers["x-api-version"] == "1"
+        assert response.headers["x-ratelimit-limit"]
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["x-content-type-options"] == "nosniff"
+
+        unauthorized = client.get("/v1/capabilities", headers={
+            "X-API-Key": "wrong", "X-Tenant-ID": "test-tenant",
+        })
+        assert unauthorized.status_code == 401
+        assert unauthorized.headers["www-authenticate"] == "ApiKey"
+
+
+def test_production_configuration_fails_closed_and_disables_demo_defaults():
+    unsafe = Settings(
+        _env_file=None,
+        environment="production",
+        database_url="sqlite:///./unsafe.db",
+        tenant_api_keys={},
+        semantic_extractor="deterministic",
+    )
+    with pytest.raises(RuntimeError, match="生产配置检查失败"):
+        unsafe.validate_runtime_configuration()
+
+    production = Settings(
+        _env_file=None,
+        environment="production",
+        database_url="postgresql://profile:secret@database/profile",
+        tenant_api_keys={"customer-a": "x" * 32},
+        semantic_extractor="deterministic",
+    )
+    production.validate_runtime_configuration()
+    assert production.demo_features_active is False
+    assert production.api_docs_active is False
+    assert production.profile_reset_active is False
+
+
+def test_rate_limiter_is_tenant_scoped_and_returns_retry_window():
+    limiter = SlidingWindowRateLimiter()
+    assert limiter.check("tenant-a", 2, now=100.0) == (True, 1, 0)
+    assert limiter.check("tenant-a", 2, now=101.0) == (True, 0, 0)
+    allowed, remaining, retry_after = limiter.check("tenant-a", 2, now=102.0)
+    assert allowed is False and remaining == 0 and retry_after == 58
+    assert limiter.check("tenant-b", 2, now=102.0) == (True, 1, 0)
 
 
 def test_golden_profiles_are_complete():

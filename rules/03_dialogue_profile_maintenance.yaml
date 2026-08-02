@@ -233,6 +233,33 @@ evidence_types:
     base_reliability: 1.0
     persistence: "rule_version_or_until_corrected"
 
+model_candidate_validation:
+  minimum_confidence: 0.60
+  require_supporting_span_verbatim: true
+  require_matching_semantic_frame: true
+  trait_eligible_subjects: ["user"]
+  trait_eligible_modalities: ["asserted"]
+  trait_eligible_domains:
+    - "habit"
+    - "decision"
+    - "task_behavior"
+    - "social_behavior"
+    - "relationship_behavior"
+    - "self_evaluation"
+  forbidden_trait_domains:
+    - "identity_fact"
+    - "preference"
+    - "communication_behavior"
+    - "emotion"
+    - "event"
+    - "correction"
+    - "hypothetical"
+    - "quotation"
+  interaction_preference_spans_cannot_update_traits: true
+  rule: >-
+    对机器人回复方式的要求、当前状态、身份事实、事件、引用和假设只能进入对应事实或运行时层；
+    即使模型同时给出长期画像候选，也必须拒绝。长期画像候选必须与同一原文片段中的合格语义帧对应。
+
 language_understanding_rules:
   negation:
     examples:
@@ -613,14 +640,30 @@ portrait_regeneration:
     将其路由到基础字段；基础字段更新后再生成essence/strengths/weaknesses/core_tension/suitable_roles。
 
 runtime_state_and_memory:
+  interaction_preferences:
+    prefers_short_responses:
+      target: "response_length"
+      value: "short"
+    needs_empathy_before_advice:
+      target: "empathy_first"
+      value: 1.0
+    dislikes_humor:
+      target: "humor_level"
+      value: 0.0
   current_state:
     emotion:
       ttl: "2h"
       merge: "new_explicit_state_overwrites_same_emotion_dimension"
     stress_level:
+      predicates: ["high_stress"]
+      value: 0.85
+      ttl_hours: 24
       ttl: "24h"
       decay: "exponential_half_life_8h"
     energy_level:
+      predicates: ["low_energy"]
+      value: 0.20
+      ttl_hours: 12
       ttl: "12h"
       decay: "exponential_half_life_4h"
     guardrail: "state永不直接修改17维；重复跨会话模式可另形成trait evidence。"
@@ -651,10 +694,10 @@ update_operators:
       - "runtime.interaction_preferences.humor_level"
     rule: "用户明确指令立即生效，不修改17维。"
   ADD_TRAIT_EVIDENCE:
-    targets: "all 17 core_traits fields"
+    targets: ["core_traits.*.*"]
     rule: "通过trait_mapping_rules路由；不可写未知字段。"
   UPSERT_SCENARIO_EVIDENCE:
-    targets: "all 18 behavior_style scenarios"
+    targets: ["behavior_style.*.*"]
     rule: "直接证据更新场景，重复后才反馈到trait。"
   UPDATE_LANGUAGE_OBSERVATION:
     targets:
@@ -666,16 +709,16 @@ update_operators:
     rule: "使用滚动窗口、样本量和origin。"
   REBUILD_DERIVED:
     targets:
-      - "mbti_dimensions"
-      - "behavior_style affected scenarios"
-      - "language_style derived candidates"
-      - "portrait"
+      - "mbti_dimensions.*"
+      - "behavior_style.*.*"
+      - "language_style.*"
+      - "portrait.*"
 
 update_math:
   evidence_impact: >-
     reliability * explicitness * frequency_factor * context_relevance * freshness * independence * rule_weight
   trait_update: "new_value = clip(old_value + direction * base_delta * evidence_impact, 0, 1)"
-  confidence_merge: "new_conf = 1 - (1-old_conf) * (1-evidence_impact*independence)"
+  confidence_merge: "new_conf = 1 - (1-old_conf) * (1-evidence_impact)"
   conflict_penalty: "final_conf = new_conf * (1-conflict_ratio*0.5)"
   no_op_threshold: 0.01
   same_message_same_target_cap: 0.06

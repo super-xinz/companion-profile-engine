@@ -1,6 +1,6 @@
 # 共鸣画像引擎
 
-本次双项目协同进化的交付入口：[API 使用文档](docs/API_USAGE.md)、[Zeabur 部署](docs/DEPLOYMENT_ZEABUR.md)、[实施报告](IMPLEMENTATION_REPORT.md) 与 [Postman Collection](postman/companion-profile-engine.postman_collection.json)。
+本次双项目协同进化的交付入口：[API 使用文档](docs/API_USAGE.md)、[B 端交付方案](docs/B2B_DELIVERY.md)、[Zeabur 部署](docs/DEPLOYMENT_ZEABUR.md)、[实施报告](IMPLEMENTATION_REPORT.md) 与 [Postman Collection](postman/companion-profile-engine.postman_collection.json)。
 
 面向陪伴机器人与心理／学习专家协作的多人画像管理平台。系统将规则、人物、长期画像、证据、对话和人工修正统一管理；模型只能提出候选，只有通过规则校验的内容才会进入画像。
 
@@ -34,6 +34,9 @@
 - 主型、侧翼、本能、当前状态和场景分别生成动机、注意力、表达、状态与互动策略；用户明确偏好和安全规则优先。
 - 规则引擎负责证据校验、置信度、冲突、单轮限幅、跨会话重复、版本和审计。
 - 千问（可选）负责从对话中生成结构化语义候选与回答策略，**不直接写入数据库**。
+- Chatbot 应在自己的服务端分别调用本项目的画像 API 和语言模型 API：画像 API 维护状态并返回 `reply_hints`，语言模型 API 负责生成最终自然语言回复；两者不是同一个 API。
+- 客户端不需要随消息上传整份画像。本服务按租户和 `user_id` 自行读取、版本化和保存画像；请求只携带消息、版本和必要的最近对话。
+- 回复方式指令、短期状态、事实和事件不能修改长期性格；所有规则目标在编译与发布时都会和真实画像字段做闭环校验。
 - 内置五份经授权的完整人物画像；其他人物可在工作台中新建。
 
 ## 项目结构
@@ -79,6 +82,7 @@ make run
 | 规则管理工作台 | `http://localhost:8000/rules` |
 | API 文档 | `http://localhost:8000/docs` |
 | 健康检查 | `http://localhost:8000/health` |
+| 存活/就绪检查 | `http://localhost:8000/livez`、`http://localhost:8000/readyz` |
 
 运行测试：
 
@@ -101,6 +105,10 @@ PROFILE_QWEN_API_KEY=模型服务密钥
 PROFILE_QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 PROFILE_QWEN_MODEL=qwen3.7-plus
 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true
+PROFILE_DEMO_FEATURES_ENABLED=false
+PROFILE_API_DOCS_ENABLED=false
+PROFILE_ALLOW_PROFILE_RESET=false
+PROFILE_RATE_LIMIT_PER_MINUTE=120
 ```
 
 若不使用外部模型服务，请将 `PROFILE_SEMANTIC_EXTRACTOR` 设为 `deterministic`。外部语义处理默认关闭；只有已取得对话数据外发授权时才应启用。

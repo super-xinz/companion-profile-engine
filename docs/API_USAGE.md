@@ -4,15 +4,35 @@
 
 ## 1. API 简介与 Chatbot 时序
 
-该 API 接收明确授权的用户资料和持续对话，输出带版本、置信度、证据和运行时状态的可审计画像。Chatbot 推荐顺序：
+该项目是“画像分析与维护 API”，不是聊天大模型 API。一个完整陪伴机器人通常由三部分组成：浏览器或 App、开发者自己的 Chat BFF、画像引擎；Chat BFF 还会单独连接一个大模型 API。**模型 API 与本项目 API 是两个不同服务、两套职责和两组凭据。**
 
-1. `GET /v1/profiles/{user_id}` 读取当前画像；404 时调用 `POST /v1/profiles:init`。
-2. 只选取与本轮相关的画像字段，由服务端 BFF 组成模型系统上下文。
-3. BFF 请求原大模型并把回复流式返回浏览器。
-4. 回复完成后调用 `POST /v1/profiles/{user_id}/messages:ingest` 写入用户本轮表达。
-5. 下一轮重新读取新版本画像。`turn_id` 映射到 `message_id` 和 `Idempotency-Key`，避免重复更新。
+```mermaid
+sequenceDiagram
+    participant U as 用户端
+    participant B as Chatbot BFF
+    participant P as 画像引擎 API
+    participant L as 语言模型 API
+    U->>B: 本轮用户消息
+    B->>P: GET 当前画像/版本（也可使用可信缓存）
+    B->>P: POST messages:ingest（消息、版本、最近对话）
+    P-->>B: 画像更新结果 + reply_hints + 新版本
+    B->>P: GET 新版画像（需要完整上下文时）
+    B->>L: 用户消息 + 必要历史 + 精简画像 + reply_hints
+    L-->>B: 自然语言回答
+    B-->>U: 返回/流式返回回答
+```
 
-画像引擎摄取的是用户表达；`assistant_message` 不属于当前真实摄取 Schema。BFF 把最近 user/assistant 历史映射到 `context.recent_turns`。
+推荐顺序：
+
+1. `GET /v1/profiles/{user_id}` 读取当前画像和 `profile_version`；404 时调用 `POST /v1/profiles:init`。
+2. 调用 `POST /v1/profiles/{user_id}/messages:ingest`，只传用户消息、当前版本、会话标识和必要的最近轮次。**不要传整份画像**，画像引擎会按租户和 `user_id` 从自己的数据库读取。
+3. 画像引擎完成语义分析、硬规则校验和持久化，返回 `profile_patch`、`runtime_operations`、`reply_hints` 与新版本。它不直接返回最终聊天文本。
+4. BFF 获取新版画像（或安全地合并返回的变更），仅挑选本轮必要字段，与 `reply_hints` 一起放入大模型系统上下文。
+5. BFF 单独调用语言模型 API 生成自然语言回答，再返回用户。
+
+画像引擎只摄取用户表达；`assistant_message` 不属于当前摄取 Schema。BFF 可把最近 user/assistant 历史映射到 `context.recent_turns`。`turn_id` 应同时映射为 `message_id` 和 `Idempotency-Key`，防止网络重试导致重复更新。
+
+仓库内 `/demo` 页面就是上述编排的可运行 Demo：其后端 `/demo/api/chat` 先调用画像引擎，再读取更新后的画像和回答策略，最后单独调用千问生成回复。浏览器不会直接持有画像 API Key 或模型 API Key。
 
 ## 2. 启动
 
@@ -168,6 +188,7 @@ curl "$BASE_URL/v1/profiles/demo-xu" -H "X-API-Key: $API_KEY" -H "X-Tenant-ID: $
 ### 重置 Demo 测试用户（本次新增）
 
 `POST /v1/profiles/{user_id}:reset` 会删除同租户该用户的画像、证据、记忆、状态和对话，再以相同 `user_id` 创建空白 v1 画像。必须显式确认并提供幂等键。
+该能力默认只在开发/测试环境开启；客户生产环境应保持 `PROFILE_ALLOW_PROFILE_RESET=false`。
 
 ```bash
 curl -X POST "$BASE_URL/v1/profiles/demo-xu:reset" \
@@ -179,6 +200,10 @@ curl -X POST "$BASE_URL/v1/profiles/demo-xu:reset" \
 ### 当前规则包
 
 `GET /v1/rule-packs/current` 返回发布版本、SHA-256、状态、校验报告和发布时间。
+
+### 服务能力与版本协商
+
+`GET /v1/capabilities` 返回服务版本、API v1、画像 Schema、当前规则包、功能开关和调用限制。B 端服务应在启动及部署切换后读取一次并记录版本，避免只根据网页或人工配置判断兼容性。
 
 ## 5. Demo 与专家工作台真实路由
 
@@ -219,8 +244,11 @@ curl -X POST "$BASE_URL/v1/profiles/demo-xu:reset" \
 - `profile.runtime.memories`：仍有效的长期事实/事件。
 - `profile.meta.overall_confidence`、各画像项 `confidence`/`evidence_refs`：置信与依据。
 - `profile_patch`：本轮稳定画像变化；`runtime_operations`：偏好、状态、记忆操作。
+- `model_reply_guidance` 是模型提出的本轮建议；`reply_hints` 是合并硬规则后的最终策略。`reply_hints.rule_locked_fields` 列出的字段已经由画像、交互偏好或当前状态规则锁定，Chatbot 不应再让回答模型覆盖这些字段。
 
 ## 7. JavaScript 与 Python 最小示例
+
+下面前半段是画像 API 的最小调用。生产 Chatbot 应在**服务端**执行它，不要把画像 Key 放进网页代码。
 
 ```js
 const headers = { 'X-API-Key': apiKey, 'X-Tenant-ID': tenantId };
@@ -232,6 +260,17 @@ const update = await fetch(`${baseUrl}/v1/profiles/${userId}/messages:ingest`, {
     expected_profile_version: current.profile_version, occurred_at: new Date().toISOString(),
     text: userMessage, context: { recent_turns: [] } })
 }).then(r => r.json());
+
+// 画像引擎返回策略与画像变更，不返回最终聊天文本。
+const latest = await fetch(`${baseUrl}/v1/profiles/${userId}`, { headers }).then(r => r.json());
+const llmContext = {
+  reply_hints: update.reply_hints,
+  current_state: latest.profile.runtime.current_state,
+  interaction_preferences: latest.profile.runtime.interaction_preferences,
+  portrait_essence: latest.profile.portrait?.essence?.content,
+};
+// 接下来由 BFF 使用“另一套模型 API Key”调用所选语言模型：
+// messages = [system(JSON.stringify(llmContext)), ...recentTurns, user(userMessage)]
 ```
 
 ```python
@@ -246,9 +285,28 @@ update = httpx.post(
           "occurred_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
           "text": user_message, "context": {"recent_turns": []}},
 ).json()
+
+latest = httpx.get(f"{base_url}/v1/profiles/{user_id}", headers=headers).json()
+llm_context = {
+    "reply_hints": update["reply_hints"],
+    "current_state": latest["profile"]["runtime"]["current_state"],
+    "interaction_preferences": latest["profile"]["runtime"]["interaction_preferences"],
+}
+# 使用独立的模型客户端和模型 API Key，以 llm_context 生成最终回答。
 ```
 
-## 8. 错误与重试
+如需完整可运行的“画像引擎 + 千问回答”组合示例，直接查看 `/demo` 页面及 `src/profile_engine/demo.py` 的 `/demo/api/chat` 实现。
+
+## 8. 画像写入硬边界
+
+- 模型只能返回结构化候选，不能直接写数据库。
+- 长期特质目标必须是已发布规则中完整覆盖的 17 个字段之一；支持原文必须逐字存在，并与同一片段的合格语义帧对应。
+- 回复长短、先共情、幽默程度等机器人交互指令只更新 `runtime.interaction_preferences`，不能修改长期性格。
+- 当前压力、精力等只更新带 TTL 的 `runtime.current_state`；身份事实、事件、引用、假设也不能越权写长期特质。
+- 单条行为、重复行为和明确自述使用不同可靠度与单轮限幅；重复行为必须达到独立会话门槛。
+- 规则编译和专家发布都会验证长期维度、行为场景、语言板块、MBTI 维度、运行时字段与更新操作目标。悬空字段、漏配字段和冲突路由会阻止发布。
+
+## 9. 错误与重试
 
 | HTTP | 代码/形态 | 原因 | 重试 |
 | ---: | --- | --- | --- |
@@ -256,6 +314,7 @@ update = httpx.post(
 | 403 | `consent_required` | 未授权画像或敏感推断 | 需用户授权，不自动重试 |
 | 404 | `not_found` | 用户/画像不存在 | 可先初始化 |
 | 409 | `profile_version_conflict` | 并发导致版本过期 | 重新读取后最多重试一次 |
+| 429 | `tenant rate limit exceeded` | 租户超过每分钟调用限制 | 按 `Retry-After` 等待 |
 | 422 | FastAPI 校验或 `invalid_operation` | 缺 Header、字段非法、复用幂等键到不同 body | 修正请求，不盲重试 |
 | 503 | `semantic_extractor_unavailable` | 外部语义提取不可用 | 有限退避重试 |
 

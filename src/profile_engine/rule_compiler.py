@@ -67,6 +67,108 @@ def scenario_keys(schema: dict) -> list[str]:
     return [key for group in groups.values() for key in group["scenarios"]]
 
 
+def validate_rule_references(schema: dict, dialogue: dict) -> list[str]:
+    """Validate every dialogue-rule target against the canonical profile schema."""
+    errors: list[str] = []
+    try:
+        traits = trait_keys(schema)
+        scenarios = scenario_keys(schema)
+        canonical_profile = schema["canonical_profile"]
+        language_sections = set(canonical_profile["language_style"]["groups"])
+        mbti_dimensions = set(canonical_profile["mbti_dimensions"]["fields"]) - {"type_label"}
+        identity_fields = set(canonical_profile["identity"]["fields"])
+    except (KeyError, TypeError, AttributeError):
+        return ["画像结构不完整，无法校验对话规则字段引用"]
+
+    mapping = dialogue.get("trait_mapping_rules", {})
+    if not isinstance(mapping, dict):
+        return ["trait_mapping_rules 必须是对象"]
+    unknown_mappings = sorted(set(mapping) - set(traits))
+    if unknown_mappings:
+        errors.append(f"对话规则含未知维度: {unknown_mappings}")
+    missing_mappings = sorted(set(traits) - set(mapping))
+    if missing_mappings:
+        errors.append(f"对话规则未覆盖维度: {missing_mappings}")
+
+    for trait, spec in mapping.items():
+        if not isinstance(spec, dict):
+            errors.append(f"对话维度 {trait} 的规则必须是对象")
+            continue
+        affected = spec.get("affected_source_fields", {})
+        unknown_scenarios = sorted(set(affected.get("behavior_scenarios", [])) - set(scenarios))
+        unknown_language = sorted(set(affected.get("language_sections", [])) - language_sections)
+        mbti_dimension = affected.get("mbti_dimension")
+        if unknown_scenarios:
+            errors.append(f"对话维度 {trait} 引用了未知行为场景: {unknown_scenarios}")
+        if unknown_language:
+            errors.append(f"对话维度 {trait} 引用了未知语言板块: {unknown_language}")
+        if mbti_dimension and mbti_dimension not in mbti_dimensions:
+            errors.append(f"对话维度 {trait} 引用了未知 MBTI 维度: {mbti_dimension}")
+
+    runtime_schema = schema.get("runtime_extensions", {})
+    preference_fields = set(runtime_schema.get("interaction_preferences", {}).get("fields", {}))
+    state_fields = set(runtime_schema.get("current_state", {}).get("fields", {}))
+    runtime_rules = dialogue.get("runtime_state_and_memory", {})
+    predicate_targets: dict[str, str] = {}
+    for predicate, spec in runtime_rules.get("interaction_preferences", {}).items():
+        target = spec.get("target") if isinstance(spec, dict) else None
+        if target not in preference_fields:
+            errors.append(f"交互偏好谓词 {predicate} 引用了未知字段: {target}")
+        if predicate in predicate_targets:
+            errors.append(f"运行时谓词 {predicate} 被重复路由")
+        predicate_targets[predicate] = f"runtime.interaction_preferences.{target}"
+    for state_key, spec in runtime_rules.get("current_state", {}).items():
+        if not isinstance(spec, dict) or "predicates" not in spec:
+            continue
+        if state_key not in state_fields:
+            errors.append(f"短期状态规则引用了未知字段: {state_key}")
+        if not isinstance(spec.get("ttl_hours"), int) or spec.get("ttl_hours", 0) <= 0:
+            errors.append(f"短期状态 {state_key} 的 ttl_hours 必须是正整数")
+        if not isinstance(spec.get("value"), (int, float)) or not 0 <= spec.get("value", -1) <= 1:
+            errors.append(f"短期状态 {state_key} 的 value 必须在 0..1")
+        for predicate in spec.get("predicates", []):
+            if predicate in predicate_targets:
+                errors.append(f"运行时谓词 {predicate} 被重复路由")
+            predicate_targets[predicate] = f"runtime.current_state.{state_key}"
+
+    valid_operator_targets = {
+        *(f"identity.{key}" for key in identity_fields),
+        *(f"runtime.interaction_preferences.{key}" for key in preference_fields),
+        *(f"runtime.current_state.{key}" for key in state_fields),
+        "runtime.memories",
+        *(f"language_style.{key}" for key in language_sections),
+        "core_traits.*.*",
+        "behavior_style.*.*",
+        "mbti_dimensions.*",
+        "language_style.*",
+        "portrait.*",
+    }
+    for operator, spec in dialogue.get("update_operators", {}).items():
+        targets = spec.get("targets", []) if isinstance(spec, dict) else []
+        if not isinstance(targets, list) or not targets:
+            errors.append(f"更新操作 {operator} 必须声明非空 targets 数组")
+            continue
+        unknown_targets = sorted(set(targets) - valid_operator_targets)
+        if unknown_targets:
+            errors.append(f"更新操作 {operator} 引用了未知画像字段: {unknown_targets}")
+
+    candidate_rules = dialogue.get("model_candidate_validation", {})
+    minimum_confidence = candidate_rules.get("minimum_confidence")
+    if not isinstance(minimum_confidence, (int, float)) or not 0 <= minimum_confidence <= 1:
+        errors.append("模型候选 minimum_confidence 必须在 0..1")
+    eligible_domains = set(candidate_rules.get("trait_eligible_domains", []))
+    forbidden_domains = set(candidate_rules.get("forbidden_trait_domains", []))
+    overlap = sorted(eligible_domains & forbidden_domains)
+    if overlap:
+        errors.append(f"模型候选语义域同时允许又禁止: {overlap}")
+    evidence_types = dialogue.get("evidence_types", {})
+    required_scopes = {"explicit_self_report", "repeated_behavior", "single_behavior_inference"}
+    missing_scopes = sorted(required_scopes - set(evidence_types))
+    if missing_scopes:
+        errors.append(f"缺少长期特质证据类型: {missing_scopes}")
+    return errors
+
+
 def compile_rule_pack(source_dir: Path) -> CompiledRulePack:
     missing = [name for name in RULE_FILES if not (source_dir / name).exists()]
     if missing:
@@ -143,13 +245,7 @@ def compile_rule_pack(source_dir: Path) -> CompiledRulePack:
             if direction not in (-1, 0, 1):
                 errors.append(f"冷启动信号 {signal_id}.{target} 方向越界")
 
-    mapping = dialogue.get("trait_mapping_rules", {})
-    unknown_mappings = sorted(set(mapping) - set(traits))
-    if unknown_mappings:
-        errors.append(f"对话规则含未知维度: {unknown_mappings}")
-    missing_mappings = sorted(set(traits) - set(mapping))
-    if missing_mappings:
-        errors.append(f"对话规则未覆盖维度: {missing_mappings}")
+    errors.extend(validate_rule_references(schema, dialogue))
 
     dialogue_scenarios = set(dialogue.get("behavior_scenario_maintenance", {}).get("scenarios", {}))
     if dialogue_scenarios != set(scenarios):

@@ -21,6 +21,17 @@
       "request": { "method": "GET", "url": "{{profileBaseUrl}}/health" }
     },
     {
+      "name": "Capabilities and versions",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "X-API-Key", "value": "{{profileApiKey}}", "type": "text" },
+          { "key": "X-Tenant-ID", "value": "{{tenantId}}" }
+        ],
+        "url": "{{profileBaseUrl}}/v1/capabilities"
+      }
+    },
+    {
       "name": "Initialize profile",
       "request": {
         "method": "POST",
@@ -70,7 +81,8 @@
           { "key": "Content-Type", "value": "application/json" }
         ],
         "body": { "mode": "raw", "raw": "{\"confirm\": true, \"display_name\": \"Postman Demo\"}" },
-        "url": "{{profileBaseUrl}}/v1/profiles/{{userId}}:reset"
+        "url": "{{profileBaseUrl}}/v1/profiles/{{userId}}:reset",
+        "description": "仅开发/测试环境开启；客户生产环境默认返回 404。"
       }
     },
     {

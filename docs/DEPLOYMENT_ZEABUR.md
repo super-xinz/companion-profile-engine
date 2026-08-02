@@ -4,8 +4,8 @@
 
 ## Service
 
-- Project：`Companion Profile Demo`
-- Service：`profile-engine`
+- Project：`companion-profile-engine`
+- Service：`profile-api`
 - Git branch：`main`
 - Root Directory：`.`
 - Dockerfile：`Dockerfile`（`zbpack.json` 已声明）
@@ -29,6 +29,10 @@
 | `PROFILE_RULE_SOURCE_DIR=/app/rules` | 是 | 否 | 规则路径 |
 | `PROFILE_DEMO_TENANT_ID=demo-tenant` | 是 | 否 | 与 HIWM 一致 |
 | `PROFILE_DEMO_ACCESS_CODE` | 公开工作台时 | 是 | `/demo` 与 `/rules` 口令 |
+| `PROFILE_DEMO_FEATURES_ENABLED` | 是 | 否 | 团队演示为 `true`；客户生产为 `false` |
+| `PROFILE_API_DOCS_ENABLED` | 是 | 否 | 团队验收可开启；客户生产默认关闭 |
+| `PROFILE_ALLOW_PROFILE_RESET` | 是 | 否 | 仅测试环境允许 |
+| `PROFILE_RATE_LIMIT_PER_MINUTE` | 是 | 否 | 单副本租户级基础限流 |
 | `PROFILE_SEMANTIC_EXTRACTOR=deterministic` | 是 | 否 | 可改 `qwen` |
 | `PROFILE_QWEN_API_KEY` | qwen 时 | 是 | 外部处理需授权 |
 | `PROFILE_QWEN_BASE_URL`、`PROFILE_QWEN_MODEL` | qwen 时 | 否 | 供应商配置 |
@@ -41,14 +45,18 @@
 ## 验收
 
 1. Build Logs 无失败，Runtime Logs 显示 Alembic 完成和 Uvicorn 启动。
-2. `/health` 返回 `status=ok`、`services.database=ok`。
+2. `/livez`、`/readyz` 返回 200，`/health` 返回 `status=ok`、`services.database=ok`。
 3. 用无效 Key 请求 `/v1/profiles/demo-xu` 返回 401。
 4. 用有效 Key 初始化、读取、摄取、读取新版本、重置均成功。
 5. PostgreSQL/Service 重启后画像仍存在。
 6. 日志只包含 request_id、path、状态和耗时，不含 Key/Header/完整画像。
+7. `GET /v1/capabilities` 返回服务 0.3.0、API v1、Schema 与规则包版本。
+8. 客户生产环境的 `/demo`、`/rules`、`/docs` 与 `:reset` 均不可访问。
 
 ## 更新与回滚
 
 GitHub `main` push 自动部署，或在 Dashboard 手动 Redeploy。回滚到上一个稳定 commit 前，先核对该版本与现有 Alembic schema 的兼容性；数据库使用平台备份恢复，不要通过删除迁移文件回滚。环境变量修改后重新部署并再次跑冒烟脚本。
+
+当前 Zeabur `profile-api` 实例是手工上传来源，控制台显示 `Reupload`，不会自动跟随 GitHub 更新。团队短期可继续上传不含 `.env`、`.git`、虚拟环境和本地数据库的源码包；长期应改为连接私有 GitHub 仓库并启用受控的 main/tag 部署。
 
 官方参考：[Dockerfile 部署](https://zeabur.com/docs/en-US/deploy/methods/dockerfile)、[环境变量](https://zeabur.com/docs/en-US/deploy/config/environment-variables)、[公网域名](https://zeabur.com/docs/en-US/deploy/networking/public-networking)。
