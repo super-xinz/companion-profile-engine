@@ -89,6 +89,13 @@ class ForgetRequest(BaseModel):
         return value
 
 
+class ResetProfileRequest(BaseModel):
+    """Explicit confirmation payload for destructive demo-user resets."""
+
+    confirm: Literal[True]
+    display_name: str | None = Field(default=None, max_length=256)
+
+
 class SemanticFrame(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

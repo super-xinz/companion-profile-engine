@@ -1,5 +1,7 @@
 # 共鸣画像引擎
 
+本次双项目协同进化的交付入口：[API 使用文档](docs/API_USAGE.md)、[Zeabur 部署](docs/DEPLOYMENT_ZEABUR.md)、[实施报告](IMPLEMENTATION_REPORT.md) 与 [Postman Collection](postman/companion-profile-engine.postman_collection.json)。
+
 面向陪伴机器人与心理／学习专家协作的多人画像管理平台。系统将规则、人物、长期画像、证据、对话和人工修正统一管理；模型只能提出候选，只有通过规则校验的内容才会进入画像。
 
 > 本仓库不包含访问密码、数据库凭据或模型 API Key。请仅通过环境变量注入这些配置。

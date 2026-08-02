@@ -107,6 +107,48 @@ def test_consent_and_forget_birth_inference():
         assert profile["core_traits"]["energy_mode"]["extroversion"]["value"] == 0.5
 
 
+def test_reset_profile_is_confirmed_idempotent_and_recreates_blank_profile():
+    user = f"reset-{uuid.uuid4().hex}"
+    with TestClient(app) as client:
+        initialized = client.post("/v1/profiles:init", headers=idem(f"init-{user}"), json={
+            "tenant_user_id": user,
+            "consent": {"profile": True, "sensitive_inference": False},
+        })
+        assert initialized.status_code == 200
+        changed = client.post(f"/v1/profiles/{user}:correct", headers=idem(f"correct-{user}"), json={
+            "expected_profile_version": 1,
+            "target_path": "core_traits.energy_mode.extroversion",
+            "value": 1.0,
+            "reason": "测试重置前的画像变化",
+        })
+        assert changed.status_code == 200
+
+        rejected = client.post(
+            f"/v1/profiles/{user}:reset",
+            headers=idem(f"reset-invalid-{user}"),
+            json={"confirm": False},
+        )
+        assert rejected.status_code == 422
+
+        headers = idem(f"reset-{user}")
+        reset = client.post(
+            f"/v1/profiles/{user}:reset",
+            headers=headers,
+            json={"confirm": True, "display_name": "重置用户"},
+        )
+        assert reset.status_code == 200, reset.text
+        assert reset.json()["reset"] is True
+        assert reset.json()["profile_version"] == 1
+        assert reset.json()["profile"]["core_traits"]["energy_mode"]["extroversion"]["value"] == 0.5
+
+        retry = client.post(
+            f"/v1/profiles/{user}:reset",
+            headers=headers,
+            json={"confirm": True, "display_name": "重置用户"},
+        )
+        assert retry.json() == reset.json()
+
+
 def test_correction_explanation_and_evidence_reversal():
     user = f"correct-{uuid.uuid4().hex}"
     field = "core_traits.energy_mode.extroversion"
