@@ -188,6 +188,8 @@ class QwenSemanticExtractor:
                 "reply_guidance": payload.get("reply_guidance", {}),
             }
             return SemanticAnalysis.model_validate(analysis_payload)
+        except httpx.HTTPStatusError as exc:
+            raise SemanticExtractorError(f"千问语义抽取失败: HTTP {exc.response.status_code}") from exc
         except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, ValueError) as exc:
             raise SemanticExtractorError(f"千问语义抽取失败: {type(exc).__name__}") from exc
 

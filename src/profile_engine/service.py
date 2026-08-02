@@ -15,7 +15,7 @@ from .digital_code import (aggregate_trait_priors, build_digital_code_profile,
                            empty_digital_code_profile)
 from .enneagram import (build_enneagram_profile, empty_enneagram_profile,
                          resolve_interaction_strategy)
-from .extractor import get_semantic_extractor
+from .extractor import SemanticExtractor, get_semantic_extractor
 from .models import (AuditLog, CurrentState, ManualOverride, Memory, ProfileEvidence,
                      ProfileVersion, RulePack, RuntimePreference, User)
 from .profile import (GOLDEN_TRAITS, TRAIT_NAMES, BirthFeatureCalculator,
@@ -497,7 +497,7 @@ def _merge_reply_guidance(profile_hints: dict, guidance: ReplyGuidance) -> dict:
 
 
 def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: MessageIngestRequest, pack: RulePack,
-                   req_id: str, idem_key: str) -> dict:
+                   req_id: str, idem_key: str, semantic_extractor: SemanticExtractor | None = None) -> dict:
     user = find_user(db, tenant_id, tenant_user_id)
     if not user.profile_consent or not user.inference_enabled:
         raise ConsentError("画像推断已关闭")
@@ -505,7 +505,7 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
     _check_version(version, body.expected_profile_version)
     before = clone_profile(version.snapshot)
     profile = clone_profile(version.snapshot)
-    extractor = get_semantic_extractor()
+    extractor = semantic_extractor or get_semantic_extractor()
     analysis = extractor.analyze(
         body.text,
         trait_catalog=_trait_catalog(profile),
