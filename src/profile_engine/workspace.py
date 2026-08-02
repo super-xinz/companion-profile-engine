@@ -338,7 +338,8 @@ def manual_edit(user_id: str, body: ManualEditRequest, request: Request,
     if version.version_no != body.expected_profile_version:
         raise HTTPException(status_code=409, detail=f"画像已更新为 v{version.version_no}，请刷新后重试")
     if body.target_path.startswith(
-        ("mbti_dimensions", "behavior_style", "language_style", "portrait", "enneagram_profile", "meta")
+        ("mbti_dimensions", "behavior_style", "language_style", "portrait", "digital_code_profile",
+         "enneagram_profile", "meta")
     ):
         raise HTTPException(status_code=422, detail="派生字段不能直接修改，请编辑底层画像维度或事实")
     before = clone_profile(version.snapshot)

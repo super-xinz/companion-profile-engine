@@ -1,6 +1,6 @@
 rule_system_version: "1.0.0"
 document_type: "enneagram_interaction_parameter_model"
-target_schema: "01_profile_schema.yaml@2.1.0"
+target_schema: "01_profile_schema.yaml@2.2.0"
 language: "zh-CN"
 status: "expert_review_required"
 

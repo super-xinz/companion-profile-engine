@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import uuid
 from datetime import date, datetime, timezone
 from typing import Literal
@@ -14,12 +15,14 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db
+from .extractor import DeterministicSemanticExtractor, SemanticExtractorError
 from .models import ChatMessage, Conversation, RulePack, User
 from .schemas import Consent, ConversationTurn, MessageContext, MessageIngestRequest, ProfileInitRequest
 from .service import get_profile, ingest_message, init_profile
 
 
 router = APIRouter(prefix="/demo/api", tags=["demo"])
+logger = logging.getLogger(__name__)
 
 
 class DemoStartRequest(BaseModel):
@@ -77,9 +80,18 @@ def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
     if not settings.qwen_api_key:
         return _fallback_reply(text, hints), "fallback-v1"
     portrait = profile.get("portrait", {})
+    digital_code = profile.get("digital_code_profile", {})
     internal_context = {
         "reply_hints": hints,
         "portrait_essence": portrait.get("essence", {}).get("content"),
+        "digital_code_profile": {
+            "code": digital_code.get("code"),
+            "confidence": digital_code.get("confidence"),
+            "domain_summaries": {
+                key: value.get("summary")
+                for key, value in digital_code.get("domains", {}).items()
+            },
+        } if digital_code.get("status") == "derived" else None,
         "overall_confidence": profile.get("meta", {}).get("overall_confidence"),
         "current_state": profile.get("runtime", {}).get("current_state", {}),
         "interaction_preferences": profile.get("runtime", {}).get("interaction_preferences", {}),
@@ -196,8 +208,17 @@ def demo_chat(body: DemoChatRequest, request: Request, tenant_id: str = Depends(
             recent_turns=[ConversationTurn(role=item.role, content=item.content) for item in body.history[-12:]],
         ),
     )
-    engine = ingest_message(db, tenant_id, body.user_id, message, _current_pack(request, db),
-                            request.state.request_id, f"demo-chat-{body.user_id}-{body.message_id}")
+    try:
+        engine = ingest_message(db, tenant_id, body.user_id, message, _current_pack(request, db),
+                                request.state.request_id, f"demo-chat-{body.user_id}-{body.message_id}")
+    except SemanticExtractorError as exc:
+        logger.warning("Semantic extraction unavailable; using deterministic fallback: %s", exc)
+        engine = ingest_message(
+            db, tenant_id, body.user_id, message, _current_pack(request, db),
+            request.state.request_id, f"demo-chat-{body.user_id}-{body.message_id}",
+            semantic_extractor=DeterministicSemanticExtractor(),
+        )
+        engine["strategy_trace"]["semantic_fallback"] = "qwen_unavailable"
     current = get_profile(db, tenant_id, body.user_id)["profile"]
     reply, responder = _generate_reply(body.text, body.history, current, engine)
     engine["strategy_trace"]["consumed_by_chatbot"] = True

@@ -328,6 +328,7 @@ function renderProfile(overrides = []) {
   const sourcePortrait = profile.source_portrait || {};
   const sourceDocument = profile.source_profile_document;
   const enneagram = profile.enneagram_profile || {status: "unassigned", identity: {}, layers: {}, interaction_strategy: {}};
+  const digitalCode = profile.digital_code_profile || {status: "unassigned", domains: {}};
   const portraitLabels = {
     essence: "本质", strengths: "优势", weaknesses: "弱点",
     core_tension: "核心矛盾", suitable_roles: "适合角色"
@@ -354,6 +355,22 @@ function renderProfile(overrides = []) {
             <label>成长方向</label><span>${esc(enneagram.interaction_strategy?.companionship?.growth_direction)}</span>
           </div>
         </div>` : `<div class="inspector-card"><small>尚未设置九型人格。系统不会根据 MBTI、生日或单轮对话自动推断。</small></div>`}
+    </div>
+    <div class="trait-section">
+      <div class="section-heading"><b>数字密码画像</b><small>生日归约 · 低置信度冷启动</small></div>
+      ${digitalCode.status === "derived" ? `
+        <div class="inspector-card"><div class="data-grid">
+          <label>数字密码</label><span>${esc(digitalCode.code)}</span>
+          <label>模型置信度</label><span>${Math.round((digitalCode.confidence || 0) * 100)}%</span>
+          <label>算法版本</label><span>${esc(digitalCode.algorithm_version)}</span>
+          <label>来源</label><span>${esc(digitalCode.provenance?.source_file)}</span>
+        </div></div>
+        ${Object.values(digitalCode.domains || {}).map(domain => `
+          <div class="inspector-card source-portrait"><b>${esc(domain.label)}</b><p>${esc(domain.summary)}</p>
+            <details class="source-sheet"><summary>查看 ${domain.components?.length || 0} 个加权成分</summary>
+              <div class="source-table-wrap"><table><tr><th>特质</th><th>权重</th><th>内容</th></tr>${(domain.components || []).map(item => `<tr><td>${esc(item.label)}</td><td>${Math.round(item.weight * 100)}%</td><td>${esc(item.text)}</td></tr>`).join("")}</table></div>
+            </details>
+          </div>`).join("")}` : `<div class="inspector-card"><small>未提供生日、未授权生日推断，或日期超出当前规则库范围。</small></div>`}
     </div>
     ${sourceDocument ? `<div class="trait-section">
       <div class="section-heading"><b>原始完整画像</b><small>${esc(sourceDocument.source_file)}</small></div>

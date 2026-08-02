@@ -103,6 +103,7 @@ def test_consent_and_forget_birth_inference():
         assert forgotten.status_code == 200, forgotten.text
         profile = client.get(f"/v1/profiles/{user}", headers=HEADERS).json()["profile"]
         assert profile["birth_analysis"]["numerology_code"] is None
+        assert profile["digital_code_profile"]["status"] == "unassigned"
         assert profile["core_traits"]["energy_mode"]["extroversion"]["value"] == 0.5
 
 

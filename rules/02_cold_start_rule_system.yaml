@@ -1,6 +1,6 @@
 rule_system_version: "2.0.1-draft"
 document_type: "cold_start_rule_system"
-target_schema: "01_profile_schema.yaml@2.1.0"
+target_schema: "01_profile_schema.yaml@2.2.0"
 status: "expert_review_required"
 
 objective: >-
@@ -65,10 +65,11 @@ execution_pipeline:
 feature_calculators:
   numerology_code:
     interface: "BirthFeatureCalculator.calculate_numerology_code(birth_date)"
-    output_pattern: "^[0-9]{4}$"
-    implementation_status: "missing_expert_formula"
+    output_pattern: "^[1-9]{4}$"
+    implementation_status: "implemented_from_supplied_rule_bank"
     rule: >-
-      在专家给出可复现公式前，只允许使用显式配置的测试映射；不得根据三个样例自行拟合通用公式。
+      将日、月、年份前两位、年份后两位分别求1至9循环数字根并按顺序拼接；
+      当前1458条规则覆盖1900至2099年，归约算法仍需专家最终确认。
     golden_test_mappings:
       "1998-12-06": "6318"
       "1989-10-15": "6118"
