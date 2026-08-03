@@ -53,7 +53,7 @@
 4. 用有效 Key 初始化、读取、摄取、读取新版本、重置均成功。
 5. PostgreSQL/Service 重启后画像仍存在。
 6. 日志只包含 request_id、path、状态和耗时，不含 Key/Header/完整画像。
-7. `GET /v1/capabilities` 返回服务 0.4.0、API v1、Schema、规则包与可选模型配置。
+7. `GET /v1/capabilities` 返回服务 0.4.1、API v1、Schema、规则包与可选模型配置。
 8. 客户生产环境的 `/demo`、`/rules`、`/docs` 与 `:reset` 均不可访问。
 
 ## 更新与回滚
