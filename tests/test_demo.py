@@ -15,6 +15,7 @@ def test_demo_page_and_conversation_flow():
             assert 'class="messages scroll-surface"' in page.text
             assert "完整画像" in page.text
             assert "规则管理" in page.text
+            assert 'id="modelProviderSelect"' in page.text
 
             started = client.post("/demo/api/start", json={
                 "display_name": "演示用户",
@@ -43,14 +44,14 @@ def test_demo_page_and_conversation_flow():
         app.dependency_overrides.pop(demo_auth, None)
 
 
-def test_demo_chat_falls_back_when_qwen_semantic_extraction_fails(monkeypatch):
+def test_demo_chat_falls_back_when_selected_model_semantic_extraction_fails(monkeypatch):
     class FailingExtractor:
-        version = "qwen-unavailable-test"
+        version = "deepseek-unavailable-test"
 
         def analyze(self, *args, **kwargs):
-            raise SemanticExtractorError("千问语义抽取失败: HTTP 429")
+            raise SemanticExtractorError("DeepSeek V3.2 语义抽取失败: HTTP 429")
 
-    monkeypatch.setattr("profile_engine.service.get_semantic_extractor", lambda: FailingExtractor())
+    monkeypatch.setattr("profile_engine.service.get_semantic_extractor", lambda *_: FailingExtractor())
     app.dependency_overrides[demo_auth] = lambda: "demo-fallback-test-tenant"
     try:
         with TestClient(app) as client:
@@ -67,6 +68,6 @@ def test_demo_chat_falls_back_when_qwen_semantic_extraction_fails(monkeypatch):
             body = turn.json()
             assert body["assistant_reply"]
             assert body["engine"]["semantic_extractor_version"] == "deterministic-zh-v1"
-            assert body["engine"]["strategy_trace"]["semantic_fallback"] == "qwen_unavailable"
+            assert body["engine"]["strategy_trace"]["semantic_fallback"] == "deepseek_unavailable"
     finally:
         app.dependency_overrides.pop(demo_auth, None)

@@ -21,7 +21,7 @@ def test_b2b_capabilities_security_headers_and_api_key_challenge():
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["api_version"] == "v1"
-        assert body["service_version"] == "0.3.0"
+        assert body["service_version"] == "0.4.0"
         assert body["limits"]["requests_per_minute"] >= 1
         assert response.headers["x-api-version"] == "1"
         assert response.headers["x-ratelimit-limit"]
@@ -57,6 +57,30 @@ def test_production_configuration_fails_closed_and_disables_demo_defaults():
     assert production.demo_features_active is False
     assert production.api_docs_active is False
     assert production.profile_reset_active is False
+
+    missing_model_key = Settings(
+        _env_file=None,
+        environment="production",
+        database_url="postgresql://profile:secret@database/profile",
+        tenant_api_keys={"customer-a": "x" * 32},
+        semantic_extractor="model",
+        allow_external_semantic_processing=True,
+        openrouter_api_key=None,
+    )
+    with pytest.raises(RuntimeError, match="PROFILE_OPENROUTER_API_KEY"):
+        missing_model_key.validate_runtime_configuration()
+
+    configured_model = Settings(
+        _env_file=None,
+        environment="production",
+        database_url="postgresql://profile:secret@database/profile",
+        tenant_api_keys={"customer-a": "x" * 32},
+        semantic_extractor="model",
+        default_model_provider="claude",
+        allow_external_semantic_processing=True,
+        openrouter_api_key="sk-or-test",
+    )
+    configured_model.validate_runtime_configuration()
 
 
 def test_rate_limiter_is_tenant_scoped_and_returns_retry_window():

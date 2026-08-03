@@ -8,6 +8,9 @@ from typing import Protocol
 import httpx
 
 from .config import get_settings
+from .model_gateway import (ModelConfigurationError, ModelEndpoint,
+                            ModelProvider, chat_completion,
+                            get_model_endpoint)
 from .schemas import ReplyGuidance, SemanticAnalysis, SemanticFrame, TraitSignal
 
 
@@ -101,7 +104,7 @@ class DeterministicSemanticExtractor:
         return self.analyze(text).frames
 
 
-QWEN_SYSTEM_PROMPT = """你是陪伴机器人画像引擎的通用理解层。你提出结构化候选，但不能直接修改画像。
+MODEL_SYSTEM_PROMPT = """你是陪伴机器人画像引擎的通用理解层。你提出结构化候选，但不能直接修改画像。
 请输出一个 JSON 对象，顶层必须且只能包含 frames、trait_signals、reply_guidance。
 frames 中 frame_id 由服务端生成，不要输出。每个 frame 必须包含：
 subject(user|other_person|robot|group|unknown), predicate, object(null或字符串),
@@ -141,14 +144,21 @@ question_count(0到2), structure_level(simple|steps|flexible_options), focus, av
 输出必须是可解析 JSON，不要使用 Markdown。"""
 
 
-class QwenSemanticExtractor:
-    version = "qwen-universal-v2"
+def _decode_json_object(content: str) -> dict:
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, count=1, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned, count=1)
+    payload = json.loads(cleaned)
+    if not isinstance(payload, dict):
+        raise ValueError("模型结果不是 JSON 对象")
+    return payload
 
-    def __init__(self, api_key: str, base_url: str, model: str, timeout: float = 30.0):
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
-        self.model = model
-        self.timeout = timeout
+
+class ModelSemanticExtractor:
+    def __init__(self, endpoint: ModelEndpoint):
+        self.endpoint = endpoint
+        self.version = f"{endpoint.provider}:{endpoint.model}:universal-v2"
 
     def analyze(self, text: str, trait_catalog: dict | None = None,
                 recent_turns: list[dict] | None = None) -> SemanticAnalysis:
@@ -158,22 +168,15 @@ class QwenSemanticExtractor:
                 "recent_turns": (recent_turns or [])[-8:],
                 "allowed_profile_dimensions": trait_catalog or {},
             }
-            response = httpx.post(
-                f"{self.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": self.model,
-                    "messages": [{"role": "system", "content": QWEN_SYSTEM_PROMPT},
-                                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}],
-                    "response_format": {"type": "json_object"},
-                    "enable_thinking": False,
-                    "temperature": 0.1,
-                },
-                timeout=self.timeout,
+            content, _ = chat_completion(
+                self.endpoint,
+                [{"role": "system", "content": MODEL_SYSTEM_PROMPT},
+                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}],
+                temperature=0.1,
+                max_tokens=2000,
+                json_response=True,
             )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-            payload = json.loads(content)
+            payload = _decode_json_object(content)
             raw_frames = payload.get("frames", [])
             if not isinstance(raw_frames, list):
                 raise ValueError("frames 不是数组")
@@ -182,7 +185,7 @@ class QwenSemanticExtractor:
                 if not isinstance(raw, dict):
                     continue
                 # Model-generated identifiers are neither stable nor trustworthy (some
-                # Qwen responses use integers). Generate a collision-resistant audit ID
+                # Some model responses use integers. Generate a collision-resistant audit ID
                 # at the service boundary instead of rejecting otherwise valid frames.
                 raw["frame_id"] = f"frm_{uuid.uuid4().hex}"
                 frames.append(SemanticFrame.model_validate(raw))
@@ -193,22 +196,33 @@ class QwenSemanticExtractor:
             }
             return SemanticAnalysis.model_validate(analysis_payload)
         except httpx.HTTPStatusError as exc:
-            raise SemanticExtractorError(f"千问语义抽取失败: HTTP {exc.response.status_code}") from exc
-        except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, ValueError) as exc:
-            raise SemanticExtractorError(f"千问语义抽取失败: {type(exc).__name__}") from exc
+            raise SemanticExtractorError(
+                f"{self.endpoint.label} 语义抽取失败: HTTP {exc.response.status_code}"
+            ) from exc
+        except (httpx.HTTPError, ModelConfigurationError, KeyError, IndexError,
+                json.JSONDecodeError, ValueError) as exc:
+            raise SemanticExtractorError(
+                f"{self.endpoint.label} 语义抽取失败: {type(exc).__name__}"
+            ) from exc
 
     def extract(self, text: str) -> list[SemanticFrame]:
         return self.analyze(text).frames
 
 
-def get_semantic_extractor() -> SemanticExtractor:
+def get_semantic_extractor(provider: ModelProvider | None = None) -> SemanticExtractor:
     settings = get_settings()
-    if settings.semantic_extractor == "deterministic":
+    if provider is None and settings.semantic_extractor == "deterministic":
         return DeterministicSemanticExtractor()
-    if settings.semantic_extractor == "qwen":
+    if provider is not None or settings.semantic_extractor == "model":
         if not settings.allow_external_semantic_processing:
-            raise SemanticExtractorError("千问会处理用户原话；需明确设置 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true")
-        if not settings.qwen_api_key:
-            raise SemanticExtractorError("已选择千问抽取器，但未配置 PROFILE_QWEN_API_KEY")
-        return QwenSemanticExtractor(settings.qwen_api_key, settings.qwen_base_url, settings.qwen_model, settings.qwen_timeout_seconds)
+            raise SemanticExtractorError(
+                "外部模型会处理用户原话；需明确设置 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true"
+            )
+        try:
+            endpoint = get_model_endpoint(provider)
+        except ModelConfigurationError as exc:
+            raise SemanticExtractorError(str(exc)) from exc
+        if not endpoint.api_key:
+            raise SemanticExtractorError(f"已选择 {endpoint.label}，但服务器未配置对应 API Key")
+        return ModelSemanticExtractor(endpoint)
     raise SemanticExtractorError(f"未知语义抽取器: {settings.semantic_extractor}")

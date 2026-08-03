@@ -13,7 +13,8 @@
     { "key": "sessionId", "value": "session-postman-001" },
     { "key": "turnId", "value": "turn-postman-001" },
     { "key": "accessCode", "value": "change-me", "type": "secret" },
-    { "key": "profileVersion", "value": "1" }
+    { "key": "profileVersion", "value": "1" },
+    { "key": "modelProvider", "value": "deepseek" }
   ],
   "item": [
     {
@@ -66,7 +67,7 @@
           { "key": "Idempotency-Key", "value": "{{turnId}}" },
           { "key": "Content-Type", "value": "application/json" }
         ],
-        "body": { "mode": "raw", "raw": "{\n  \"conversation_id\": \"{{sessionId}}\",\n  \"message_id\": \"{{turnId}}\",\n  \"expected_profile_version\": {{profileVersion}},\n  \"occurred_at\": \"2026-08-01T12:00:00Z\",\n  \"text\": \"以后回答短一点。\",\n  \"context\": {\"recent_turns\": []}\n}" },
+        "body": { "mode": "raw", "raw": "{\n  \"conversation_id\": \"{{sessionId}}\",\n  \"message_id\": \"{{turnId}}\",\n  \"expected_profile_version\": {{profileVersion}},\n  \"occurred_at\": \"2026-08-01T12:00:00Z\",\n  \"model_provider\": \"{{modelProvider}}\",\n  \"text\": \"以后回答短一点。\",\n  \"context\": {\"recent_turns\": []}\n}" },
         "url": "{{profileBaseUrl}}/v1/profiles/{{userId}}/messages:ingest"
       }
     },

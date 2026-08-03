@@ -33,7 +33,7 @@
 - 数字密码画像保留 26 个展开后的加权成分及来源摘要；用户事实、人工修正和对话证据始终优先。
 - 主型、侧翼、本能、当前状态和场景分别生成动机、注意力、表达、状态与互动策略；用户明确偏好和安全规则优先。
 - 规则引擎负责证据校验、置信度、冲突、单轮限幅、跨会话重复、版本和审计。
-- 千问（可选）负责从对话中生成结构化语义候选与回答策略，**不直接写入数据库**。
+- DeepSeek V3.2 或 Claude（经 OpenRouter）负责从对话中生成结构化语义候选与回答策略，**不直接写入数据库**。
 - Chatbot 应在自己的服务端分别调用本项目的画像 API 和语言模型 API：画像 API 维护状态并返回 `reply_hints`，语言模型 API 负责生成最终自然语言回复；两者不是同一个 API。
 - 客户端不需要随消息上传整份画像。本服务按租户和 `user_id` 自行读取、版本化和保存画像；请求只携带消息、版本和必要的最近对话。
 - 回复方式指令、短期状态、事实和事件不能修改长期性格；所有规则目标在编译与发布时都会和真实画像字段做闭环校验。
@@ -100,10 +100,12 @@ PROFILE_DATABASE_URL=postgresql+psycopg://...
 PROFILE_TENANT_API_KEYS={"tenant-a":"独立长随机密钥"}
 PROFILE_RULE_SOURCE_DIR=/rules
 PROFILE_DEMO_ACCESS_CODE=为团队生成的访问密码
-PROFILE_SEMANTIC_EXTRACTOR=qwen
-PROFILE_QWEN_API_KEY=模型服务密钥
-PROFILE_QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-PROFILE_QWEN_MODEL=qwen3.7-plus
+PROFILE_SEMANTIC_EXTRACTOR=model
+PROFILE_DEFAULT_MODEL_PROVIDER=deepseek
+PROFILE_OPENROUTER_API_KEY=OpenRouter服务密钥
+PROFILE_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+PROFILE_DEEPSEEK_MODEL=deepseek/deepseek-v3.2
+PROFILE_CLAUDE_MODEL=~anthropic/claude-sonnet-latest
 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true
 PROFILE_DEMO_FEATURES_ENABLED=false
 PROFILE_API_DOCS_ENABLED=false
@@ -111,7 +113,7 @@ PROFILE_ALLOW_PROFILE_RESET=false
 PROFILE_RATE_LIMIT_PER_MINUTE=120
 ```
 
-若不使用外部模型服务，请将 `PROFILE_SEMANTIC_EXTRACTOR` 设为 `deterministic`。外部语义处理默认关闭；只有已取得对话数据外发授权时才应启用。
+DeepSeek V3.2 与 Claude 均通过 OpenRouter 调用。工作台顶部可随时切换，两者共用服务器端 `PROFILE_OPENROUTER_API_KEY`，密钥不会下发浏览器。核心消息 API 可通过 `model_provider=deepseek|claude` 按请求选择。若不使用外部模型服务，请将 `PROFILE_SEMANTIC_EXTRACTOR` 设为 `deterministic`。
 
 ## Docker 部署
 

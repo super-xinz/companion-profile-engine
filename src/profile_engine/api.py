@@ -19,12 +19,14 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete, desc, select, text
 from sqlalchemy.orm import Session
 
+from . import __version__
 from .config import get_settings
 from .db import SessionLocal, get_db, init_db
 from .demo import router as demo_router
 from .workspace import router as workspace_router
 from .models import IdempotencyRecord, RulePack, User
 from .extractor import SemanticExtractorError
+from .model_gateway import public_model_options
 from .rule_compiler import compile_rule_pack
 from .schemas import (Consent, CorrectionRequest, ForgetRequest, MessageIngestRequest,
                       ProfileInitRequest, ResetProfileRequest, SetEnneagramRequest)
@@ -44,12 +46,17 @@ async def lifespan(app: FastAPI):
         pack = db.scalar(select(RulePack).where(
             RulePack.status == "published"
         ).order_by(desc(RulePack.published_at)).limit(1))
-        if not pack or "enneagram" not in pack.canonical_json:
-            settings = get_settings()
-            source = settings.rule_source_dir
-            if not source.is_absolute():
-                source = (Path.cwd() / source).resolve()
-            pack = ensure_rule_pack(db, compile_rule_pack(source))
+        settings = get_settings()
+        source = settings.rule_source_dir
+        if not source.is_absolute():
+            source = (Path.cwd() / source).resolve()
+        compiled = compile_rule_pack(source)
+        # Production keeps the expert-published database revision as source of
+        # truth. Development/test must follow the checked-out rule files so a
+        # branch update cannot silently run against an obsolete local DB pack.
+        if (not pack or "enneagram" not in pack.canonical_json
+                or (not settings.is_production and pack.sha256 != compiled.sha256)):
+            pack = ensure_rule_pack(db, compiled)
         app.state.rule_pack_id = pack.id
     yield
 
@@ -57,7 +64,7 @@ async def lifespan(app: FastAPI):
 _startup_settings = get_settings()
 app = FastAPI(
     title="陪伴机器人真人画像引擎",
-    version="0.3.0",
+    version=__version__,
     description="可审计、可更正、可遗忘的真人用户画像状态机。",
     lifespan=lifespan,
     docs_url="/docs" if _startup_settings.api_docs_active else None,
@@ -218,7 +225,7 @@ def _health_response() -> JSONResponse:
     payload = {
         "status": "ok" if database == "ok" else "degraded",
         "service": "companion-profile-engine",
-        "version": "0.3.0",
+        "version": __version__,
         "services": {"application": "ok", "database": database},
     }
     return JSONResponse(status_code=200 if database == "ok" else 503, content=payload)
@@ -231,7 +238,7 @@ def health() -> JSONResponse:
 
 @app.get("/livez", tags=["system"], include_in_schema=False)
 def liveness() -> dict:
-    return {"status": "ok", "service": "companion-profile-engine", "version": "0.3.0"}
+    return {"status": "ok", "service": "companion-profile-engine", "version": __version__}
 
 
 @app.get("/readyz", tags=["system"], include_in_schema=False)
@@ -407,11 +414,12 @@ def capabilities(request: Request, tenant_id: str = Depends(auth_context), db: S
     schema_version = pack.canonical_json.get("schema", {}).get("schema_version")
     return {
         "service": "companion-profile-engine",
-        "service_version": "0.3.0",
+        "service_version": __version__,
         "api_version": "v1",
         "tenant_id": tenant_id,
         "profile_schema_version": schema_version,
         "rule_pack": {"version": pack.version, "sha256": pack.sha256, "status": pack.status},
+        "model_config": public_model_options(),
         "features": {
             "profile_versions": True,
             "idempotent_writes": True,

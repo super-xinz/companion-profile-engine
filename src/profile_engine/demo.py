@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .db import get_db
 from .extractor import DeterministicSemanticExtractor, SemanticExtractorError
+from .model_gateway import (ModelConfigurationError, ModelProvider,
+                            chat_completion, get_model_endpoint)
 from .models import ChatMessage, Conversation, RulePack, User
 from .schemas import Consent, ConversationTurn, MessageContext, MessageIngestRequest, ProfileInitRequest
 from .service import get_profile, ingest_message, init_profile
@@ -41,6 +43,7 @@ class DemoChatRequest(BaseModel):
     message_id: str = Field(min_length=1, max_length=256)
     expected_profile_version: int = Field(ge=1)
     text: str = Field(min_length=1, max_length=4000)
+    model_provider: ModelProvider = "deepseek"
     history: list[DemoHistoryItem] = Field(default_factory=list, max_length=12)
 
 
@@ -76,10 +79,13 @@ def _fallback_reply(text: str, hints: dict) -> str:
 
 
 def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
-                    engine: dict) -> tuple[str, str]:
-    settings = get_settings()
+                    engine: dict, provider: ModelProvider) -> tuple[str, str]:
     hints = engine["reply_hints"]
-    if not settings.qwen_api_key:
+    try:
+        endpoint = get_model_endpoint(provider)
+    except ModelConfigurationError:
+        return _fallback_reply(text, hints), "fallback-v1"
+    if not endpoint.api_key:
         return _fallback_reply(text, hints), "fallback-v1"
     portrait = profile.get("portrait", {})
     digital_code = profile.get("digital_code_profile", {})
@@ -116,19 +122,14 @@ def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
     if not history or history[-1].role != "user" or history[-1].content != text:
         messages.append({"role": "user", "content": text})
     try:
-        response = httpx.post(
-            f"{settings.qwen_base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {settings.qwen_api_key}", "Content-Type": "application/json"},
-            json={"model": settings.qwen_model, "messages": messages, "enable_thinking": False,
-                  "temperature": 0.65, "max_tokens": 320},
-            timeout=settings.qwen_timeout_seconds,
+        reply, resolved_model = chat_completion(
+            endpoint,
+            messages,
+            temperature=0.65,
+            max_tokens=320,
         )
-        response.raise_for_status()
-        reply = response.json()["choices"][0]["message"]["content"].strip()
-        if not reply:
-            raise ValueError("empty reply")
-        return reply, f"{settings.qwen_model}-chat"
-    except (httpx.HTTPError, KeyError, IndexError, ValueError):
+        return reply, f"{provider}:{resolved_model}"
+    except (httpx.HTTPError, ModelConfigurationError, KeyError, IndexError, ValueError):
         return _fallback_reply(text, hints), "fallback-v1"
 
 
@@ -205,6 +206,7 @@ def demo_chat(body: DemoChatRequest, request: Request, tenant_id: str = Depends(
         expected_profile_version=body.expected_profile_version,
         occurred_at=datetime.now(timezone.utc),
         text=body.text,
+        model_provider=body.model_provider,
         context=MessageContext(
             previous_turn_count=len(body.history),
             recent_turns=[ConversationTurn(role=item.role, content=item.content) for item in body.history[-12:]],
@@ -220,9 +222,10 @@ def demo_chat(body: DemoChatRequest, request: Request, tenant_id: str = Depends(
             request.state.request_id, f"demo-chat-{body.user_id}-{body.message_id}",
             semantic_extractor=DeterministicSemanticExtractor(),
         )
-        engine["strategy_trace"]["semantic_fallback"] = "qwen_unavailable"
+        engine["strategy_trace"]["semantic_fallback"] = f"{body.model_provider}_unavailable"
     current = get_profile(db, tenant_id, body.user_id)["profile"]
-    reply, responder = _generate_reply(body.text, body.history, current, engine)
+    reply, responder = _generate_reply(body.text, body.history, current, engine, body.model_provider)
+    engine["strategy_trace"]["model_provider"] = body.model_provider
     engine["strategy_trace"]["consumed_by_chatbot"] = True
     engine["strategy_trace"]["chat_responder"] = responder
     assistant_message_id = f"assistant_{body.message_id}"

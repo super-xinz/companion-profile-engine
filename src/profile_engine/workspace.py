@@ -19,6 +19,7 @@ from .extractor import get_semantic_extractor
 from .models import (AuditLog, ChatMessage, Conversation, ManualOverride, Memory,
                      ProfileEvidence, ProfileVersion, RulePack, RuleRevision,
                      TeamMember, User)
+from .model_gateway import public_model_options
 from .profile import TRAIT_NAMES, clone_profile, flattened_traits, rebuild_derived, recalculate_meta
 from .rule_compiler import validate_rule_references
 from .schemas import (Consent, EnneagramIdentityInput, ProfileInitRequest,
@@ -210,6 +211,7 @@ def workspace_bootstrap(request: Request, tenant_id: str = Depends(demo_auth),
         "actor": {"display_name": member.display_name, "role": member.role, "permissions": member.permissions},
         "people": [_person_view(db, user) for user in people],
         "rule_pack": {"version": _current_pack(request, db).version, "status": "published"},
+        "model_config": public_model_options(),
     }
 
 

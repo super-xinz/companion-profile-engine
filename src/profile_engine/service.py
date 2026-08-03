@@ -543,7 +543,10 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
     _check_version(version, body.expected_profile_version)
     before = clone_profile(version.snapshot)
     profile = clone_profile(version.snapshot)
-    extractor = semantic_extractor or get_semantic_extractor()
+    extractor = semantic_extractor or (
+        get_semantic_extractor(body.model_provider)
+        if body.model_provider else get_semantic_extractor()
+    )
     analysis = extractor.analyze(
         body.text,
         trait_catalog=_trait_catalog(profile),

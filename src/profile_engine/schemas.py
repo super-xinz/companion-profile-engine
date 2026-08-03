@@ -59,6 +59,7 @@ class MessageIngestRequest(BaseModel):
     expected_profile_version: int = Field(ge=1)
     occurred_at: datetime
     text: str = Field(min_length=1, max_length=10000)
+    model_provider: Literal["deepseek", "claude"] | None = None
     context: MessageContext = Field(default_factory=MessageContext)
 
 

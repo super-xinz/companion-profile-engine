@@ -32,7 +32,7 @@ sequenceDiagram
 
 画像引擎只摄取用户表达；`assistant_message` 不属于当前摄取 Schema。BFF 可把最近 user/assistant 历史映射到 `context.recent_turns`。`turn_id` 应同时映射为 `message_id` 和 `Idempotency-Key`，防止网络重试导致重复更新。
 
-仓库内 `/demo` 页面就是上述编排的可运行 Demo：其后端 `/demo/api/chat` 先调用画像引擎，再读取更新后的画像和回答策略，最后单独调用千问生成回复。浏览器不会直接持有画像 API Key 或模型 API Key。
+仓库内 `/demo` 页面就是上述编排的可运行 Demo：其后端 `/demo/api/chat` 先调用画像引擎，再读取更新后的画像和回答策略，最后调用界面所选的 DeepSeek V3.2 或 Claude 生成回复。两个模型均经 OpenRouter，浏览器不会直接持有画像 API Key 或模型 API Key。
 
 ## 2. 启动
 
@@ -70,7 +70,7 @@ Linux/macOS：
 PROFILE_API_KEY=local-development-key PROFILE_TENANT_ID=test-tenant ./scripts/smoke-test.sh http://127.0.0.1:8000
 ```
 
-成功标准是脚本退出码为 0、数据库状态为 `ok`，并且偏好消息使画像版本从 v1 前进到 v2。默认 `PROFILE_SEMANTIC_EXTRACTOR=deterministic` 不依赖外部 LLM；只有改成 `qwen` 时才必须同时配置 `PROFILE_QWEN_API_KEY`、模型地址、模型名和外部语义处理授权。
+成功标准是脚本退出码为 0、数据库状态为 `ok`。`PROFILE_SEMANTIC_EXTRACTOR=model` 时，必须配置 `PROFILE_OPENROUTER_API_KEY`、模型名和外部语义处理授权；消息请求可用 `model_provider=deepseek|claude` 选择模型。`deterministic` 只用于无外部模型的回归和降级。
 
 ## 3. 鉴权与公共 Header
 
@@ -138,6 +138,7 @@ curl "$BASE_URL/v1/profiles/demo-xu" -H "X-API-Key: $API_KEY" -H "X-Tenant-ID: $
   "message_id": "turn-001",
   "expected_profile_version": 1,
   "occurred_at": "2026-08-01T12:00:00Z",
+  "model_provider": "deepseek",
   "text": "以后回答短一点，先听我把话说完。",
   "context": {
     "topic": "communication",
@@ -212,7 +213,7 @@ curl -X POST "$BASE_URL/v1/profiles/demo-xu:reset" \
 | 方法 | 路径 | 功能 |
 | --- | --- | --- |
 | POST | `/start` | 新建随机 Demo 人物与会话 |
-| POST | `/chat` | 内置画像聊天（自身可调用 Qwen） |
+| POST | `/chat` | 内置画像聊天（可选择 DeepSeek V3.2 或 Claude） |
 | POST | `/workspace/bootstrap` | 初始化团队与模板人物 |
 | GET/POST | `/people` | 列表/创建人物 |
 | GET | `/people/{user_id}` | 人物详情 |
@@ -258,7 +259,7 @@ const update = await fetch(`${baseUrl}/v1/profiles/${userId}/messages:ingest`, {
   headers: { ...headers, 'Idempotency-Key': turnId, 'Content-Type': 'application/json' },
   body: JSON.stringify({ conversation_id: sessionId, message_id: turnId,
     expected_profile_version: current.profile_version, occurred_at: new Date().toISOString(),
-    text: userMessage, context: { recent_turns: [] } })
+    model_provider: 'deepseek', text: userMessage, context: { recent_turns: [] } })
 }).then(r => r.json());
 
 // 画像引擎返回策略与画像变更，不返回最终聊天文本。
@@ -283,7 +284,8 @@ update = httpx.post(
     json={"conversation_id": session_id, "message_id": turn_id,
           "expected_profile_version": current["profile_version"],
           "occurred_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-          "text": user_message, "context": {"recent_turns": []}},
+          "model_provider": "deepseek", "text": user_message,
+          "context": {"recent_turns": []}},
 ).json()
 
 latest = httpx.get(f"{base_url}/v1/profiles/{user_id}", headers=headers).json()
@@ -295,7 +297,7 @@ llm_context = {
 # 使用独立的模型客户端和模型 API Key，以 llm_context 生成最终回答。
 ```
 
-如需完整可运行的“画像引擎 + 千问回答”组合示例，直接查看 `/demo` 页面及 `src/profile_engine/demo.py` 的 `/demo/api/chat` 实现。
+如需完整可运行的“画像引擎 + OpenRouter 模型回答”组合示例，直接查看 `/demo` 页面及 `src/profile_engine/demo.py` 的 `/demo/api/chat` 实现。
 
 ## 8. 画像写入硬边界
 

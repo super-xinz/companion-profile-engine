@@ -1,9 +1,11 @@
 const appState = {
   code: "", actor: "系统管理员", people: [], person: null, profile: null,
   conversations: [], conversationId: "", messages: [], version: 1,
-  lastEngine: null, busy: false, nearBottom: true, audit: null
+  lastEngine: null, busy: false, nearBottom: true, audit: null,
+  modelProvider: "deepseek", modelOptions: []
 };
 const ACCESS_CODE_KEY = "profile-engine-access-code";
+const MODEL_PROVIDER_KEY = "profile-engine-model-provider";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -63,12 +65,30 @@ async function bootstrap() {
   const data = await api("/demo/api/workspace/bootstrap", {method: "POST", body: "{}"});
   sessionStorage.setItem(ACCESS_CODE_KEY, appState.code);
   appState.people = data.people;
+  renderModelOptions(data.model_config);
   $("#actorName").textContent = data.actor.display_name;
   $("#actorRole").textContent = roleLabels[data.actor.role] || data.actor.role;
   $("#actorAvatar").textContent = initials(data.actor.display_name);
   renderPeople();
   $("#accessGate").classList.add("hidden");
   if (data.people.length) await selectPerson(data.people[0].user_id);
+}
+
+function renderModelOptions(config = {}) {
+  appState.modelOptions = config.options || [];
+  const saved = localStorage.getItem(MODEL_PROVIDER_KEY);
+  const available = appState.modelOptions.filter(item => item.available);
+  const selected = appState.modelOptions.find(item => item.provider === saved && item.available)
+    || appState.modelOptions.find(item => item.provider === config.default_provider && item.available)
+    || available[0]
+    || appState.modelOptions.find(item => item.provider === config.default_provider)
+    || appState.modelOptions[0];
+  appState.modelProvider = selected?.provider || "deepseek";
+  const select = $("#modelProviderSelect");
+  select.innerHTML = appState.modelOptions.map(item =>
+    `<option value="${esc(item.provider)}" ${item.provider === appState.modelProvider ? "selected" : ""} ${item.available ? "" : "disabled"}>${esc(item.label)}${item.available ? "" : "（未配置）"}</option>`
+  ).join("");
+  select.title = selected ? `${selected.label} · ${selected.route} · ${selected.model}` : "没有可用模型";
 }
 
 function renderPeople(filter = "") {
@@ -217,7 +237,8 @@ async function sendMessage() {
         conversation_id: appState.conversationId,
         message_id: messageId,
         expected_profile_version: appState.version,
-        text, history
+        text, history,
+        model_provider: appState.modelProvider
       })
     });
     setTyping(false);
@@ -479,6 +500,13 @@ $("#peopleSearch").oninput = event => renderPeople(event.target.value);
 $("#addPersonBtn").onclick = () => $("#personModal").classList.remove("hidden");
 $("#newConversationBtn").onclick = createConversation;
 $("#conversationSelect").onchange = event => selectConversation(event.target.value).catch(error => toast(error.message));
+$("#modelProviderSelect").onchange = event => {
+  appState.modelProvider = event.target.value;
+  localStorage.setItem(MODEL_PROVIDER_KEY, appState.modelProvider);
+  const selected = appState.modelOptions.find(item => item.provider === appState.modelProvider);
+  event.target.title = selected ? `${selected.label} · ${selected.route} · ${selected.model}` : "";
+  toast(`已切换为 ${selected?.label || appState.modelProvider}`);
+};
 $("#openProfileBtn").onclick = () => switchInspector("profile");
 $("#mobilePeopleBtn").onclick = () => document.querySelector(".people-rail").classList.add("open");
 $("#railCollapse").onclick = () => document.querySelector(".people-rail").classList.remove("open");

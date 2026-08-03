@@ -18,10 +18,14 @@ class Settings(BaseSettings):
     data_encryption_key: str | None = None
     state_ttl_hours: int = 24
     semantic_extractor: str = "deterministic"
-    qwen_api_key: str | None = None
-    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    qwen_model: str = "qwen3.7-plus"
-    qwen_timeout_seconds: float = 30.0
+    default_model_provider: str = "deepseek"
+    openrouter_api_key: str | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    deepseek_model: str = "deepseek/deepseek-v3.2"
+    claude_model: str = "~anthropic/claude-sonnet-latest"
+    openrouter_site_url: str | None = None
+    openrouter_app_name: str = "Companion Profile Engine"
+    model_timeout_seconds: float = 30.0
     allow_external_semantic_processing: bool = False
     demo_access_code: str | None = None
     demo_tenant_id: str = "demo-tenant"
@@ -40,7 +44,7 @@ class Settings(BaseSettings):
             return "postgresql+psycopg://" + value.removeprefix("postgresql://")
         return value
 
-    @field_validator("environment", "semantic_extractor")
+    @field_validator("environment", "semantic_extractor", "default_model_provider")
     @classmethod
     def normalize_mode(cls, value: str) -> str:
         return value.strip().lower()
@@ -71,13 +75,15 @@ class Settings(BaseSettings):
         errors: list[str] = []
         if self.environment not in {"development", "test", "production"}:
             errors.append("PROFILE_ENVIRONMENT 必须是 development、test 或 production")
-        if self.semantic_extractor not in {"deterministic", "qwen"}:
-            errors.append("PROFILE_SEMANTIC_EXTRACTOR 必须是 deterministic 或 qwen")
-        if self.semantic_extractor == "qwen":
-            if not self.qwen_api_key:
-                errors.append("启用 qwen 时必须设置 PROFILE_QWEN_API_KEY")
+        if self.default_model_provider not in {"deepseek", "claude"}:
+            errors.append("PROFILE_DEFAULT_MODEL_PROVIDER 必须是 deepseek 或 claude")
+        if self.semantic_extractor not in {"deterministic", "model"}:
+            errors.append("PROFILE_SEMANTIC_EXTRACTOR 必须是 deterministic 或 model")
+        if self.semantic_extractor == "model":
+            if self.is_production and not self.openrouter_api_key:
+                errors.append("启用 model 时必须配置 PROFILE_OPENROUTER_API_KEY")
             if not self.allow_external_semantic_processing:
-                errors.append("启用 qwen 时必须明确设置 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true")
+                errors.append("启用 model 时必须明确设置 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true")
         if self.is_production:
             if not self.database_url.startswith("postgresql+psycopg://"):
                 errors.append("生产环境必须使用 PostgreSQL，禁止使用容器内 SQLite")

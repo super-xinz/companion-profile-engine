@@ -66,9 +66,10 @@ small{display:block;color:var(--muted)}
 .person-heading b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .person-heading small{font-size:10px;margin-top:1px;white-space:nowrap}
 .head-controls{margin-left:auto;display:flex;align-items:center;gap:8px}
-.conversation-select{height:39px;display:flex;align-items:center;gap:8px;padding:0 8px 0 11px;border:1px solid var(--line);border-radius:11px;background:#fff}
-.conversation-select span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
-.conversation-select select{max-width:150px;border:0;outline:0;background:transparent;font-size:12px}
+.conversation-select,.model-select{height:39px;display:flex;align-items:center;gap:8px;padding:0 8px 0 11px;border:1px solid var(--line);border-radius:11px;background:#fff}
+.conversation-select span,.model-select span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.conversation-select select,.model-select select{max-width:150px;border:0;outline:0;background:transparent;font-size:12px}
+.model-select{border-color:#c9ddd3;background:#f5faf7}.model-select select{max-width:145px;color:var(--pine);font-weight:700}
 .chat-column{position:relative;min-height:0;flex:1;display:flex;flex-direction:column;overflow:hidden;background:radial-gradient(circle at 50% 0,#f5f3ed 0,transparent 45%)}
 .messages{min-height:0;flex:1 1 0;overflow-y:auto;overflow-x:hidden;padding:34px max(30px,7%);scroll-behavior:auto}
 .conversation-empty{max-width:500px;margin:15vh auto 0;text-align:center;color:var(--muted)}
@@ -316,7 +317,7 @@ h3.document-heading{font-size:14px}h4.document-heading{font-size:12px}
   .mobile-brand{display:flex;align-items:center;gap:7px}.mobile-brand button{border:0;background:transparent;font-size:18px;padding:5px}
   .person-heading .avatar{display:none}.person-heading small{display:none}
   .head-controls{gap:4px}.head-controls .button{padding:8px;font-size:0}.head-controls .button:after{content:"画像";font-size:10px}.head-controls .button.soft:after{content:"＋";font-size:15px}
-  .conversation-select span{display:none}.conversation-select select{max-width:95px}
+  .conversation-select span,.model-select span{display:none}.conversation-select select{max-width:95px}.model-select select{max-width:105px}
   .messages{padding:20px 14px}.message-bubble{max-width:86%}
   .inspector-panel{height:auto;min-height:620px}
   .inspector-scroll{height:540px;flex:none}
