@@ -2,9 +2,12 @@ import uuid
 from urllib.parse import quote
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from profile_engine.api import app
+from profile_engine.db import SessionLocal
 from profile_engine.demo import demo_auth
+from profile_engine.models import User
 
 
 def test_multi_person_profile_and_rule_workspaces():
@@ -20,6 +23,26 @@ def test_multi_person_profile_and_rule_workspaces():
                 "person-1996-03-28", "person-1998-12-06",
             }
             assert template_ids <= {person["user_id"] for person in boot.json()["people"]}
+
+            disabled_template_id = "person-1988-08-09"
+            with SessionLocal() as db:
+                disabled = db.scalar(select(User).where(
+                    User.tenant_id == tenant,
+                    User.tenant_user_id == disabled_template_id,
+                ))
+                assert disabled is not None
+                disabled.inference_enabled = False
+                db.commit()
+            refreshed = client.post("/demo/api/workspace/bootstrap", headers=headers)
+            assert refreshed.status_code == 200, refreshed.text
+            assert disabled_template_id not in {
+                person["user_id"] for person in refreshed.json()["people"]
+            }
+            searched = client.get("/demo/api/people", headers=headers)
+            assert searched.status_code == 200, searched.text
+            assert disabled_template_id not in {
+                person["user_id"] for person in searched.json()["people"]
+            }
 
             created = client.post("/demo/api/people", headers=headers, json={
                 "display_name": "测试人物", "birth_date": None, "notes": "隔离测试",

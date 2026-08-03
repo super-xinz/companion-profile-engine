@@ -21,7 +21,7 @@ def test_b2b_capabilities_security_headers_and_api_key_challenge():
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["api_version"] == "v1"
-        assert body["service_version"] == "0.4.1"
+        assert body["service_version"] == "0.4.2"
         assert body["limits"]["requests_per_minute"] >= 1
         assert response.headers["x-api-version"] == "1"
         assert response.headers["x-ratelimit-limit"]

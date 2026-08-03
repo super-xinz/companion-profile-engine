@@ -182,6 +182,8 @@ curl "$BASE_URL/v1/profiles/demo-xu" -H "X-API-Key: $API_KEY" -H "X-Tenant-ID: $
 
 `POST /v1/profiles/{user_id}:forget`。`scope` 为 `memory`、`evidence`、`birth_inference`、`enneagram` 或 `all_profile`；前两者必须给 `target_id`。
 
+`all_profile` 会关闭该人物的后续画像推断；已关闭或撤回画像授权的人物不会继续出现在网站工作台的可聊天人物列表中。
+
 ```json
 {"expected_profile_version":3,"scope":"memory","target_id":"mem_xxx","reason":"用户要求删除"}
 ```

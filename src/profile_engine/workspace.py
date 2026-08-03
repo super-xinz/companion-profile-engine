@@ -205,7 +205,11 @@ def workspace_bootstrap(request: Request, tenant_id: str = Depends(demo_auth),
     actor = _actor(x_actor_name)
     member = _ensure_member(db, tenant_id, actor)
     _seed_people(db, tenant_id, request)
-    people = db.scalars(select(User).where(User.tenant_id == tenant_id).order_by(desc(User.updated_at))).all()
+    people = db.scalars(select(User).where(
+        User.tenant_id == tenant_id,
+        User.profile_consent.is_(True),
+        User.inference_enabled.is_(True),
+    ).order_by(desc(User.updated_at))).all()
     db.commit()
     return {
         "actor": {"display_name": member.display_name, "role": member.role, "permissions": member.permissions},
@@ -218,7 +222,11 @@ def workspace_bootstrap(request: Request, tenant_id: str = Depends(demo_auth),
 @router.get("/people")
 def list_people(q: str | None = None, tenant_id: str = Depends(demo_auth),
                 db: Session = Depends(get_db)) -> dict:
-    query = select(User).where(User.tenant_id == tenant_id)
+    query = select(User).where(
+        User.tenant_id == tenant_id,
+        User.profile_consent.is_(True),
+        User.inference_enabled.is_(True),
+    )
     if q:
         query = query.where(User.display_name.ilike(f"%{q.strip()}%"))
     people = db.scalars(query.order_by(desc(User.updated_at))).all()
