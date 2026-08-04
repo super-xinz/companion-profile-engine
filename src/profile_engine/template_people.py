@@ -14,6 +14,7 @@ class TemplatePerson:
     trait_values: dict[str, float]
     birth_analysis: dict[str, Any]
     numerology_code: str | None = None
+    enneagram: dict[str, Any] | None = None
 
 
 TEMPLATE_PEOPLE = (
@@ -73,6 +74,14 @@ TEMPLATE_PEOPLE = (
         birth_date="1989-11-28",
         source_file="1989年11月28日_机器人性格设定.xlsx",
         mbti="ENTP",
+        enneagram={
+            "core_type": 7,
+            "wing": 8,
+            "primary_instinct": "SX",
+            "secondary_instinct": "SO",
+            "source": "expert_confirmed",
+            "confidence": 0.85,
+        },
         trait_values={
             "extroversion": 1.0, "social_warmth": .55, "assertiveness": 1.0, "impulsivity": .76,
             "openness": 1.0, "creativity": .72, "depth_of_thought": .67, "thinking_ratio": .80,
@@ -97,6 +106,14 @@ TEMPLATE_PEOPLE = (
         birth_date="1996-03-28",
         source_file="1996年3月28日_机器人性格设定.xlsx",
         mbti="ESFJ",
+        enneagram={
+            "core_type": 2,
+            "wing": 1,
+            "primary_instinct": "SO",
+            "secondary_instinct": "SX",
+            "source": "expert_confirmed",
+            "confidence": 0.85,
+        },
         trait_values={
             "extroversion": .65, "social_warmth": 1.0, "assertiveness": .70, "impulsivity": .05,
             "openness": 0.0, "creativity": .40, "depth_of_thought": .58, "thinking_ratio": .18,

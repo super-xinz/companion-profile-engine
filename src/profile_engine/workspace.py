@@ -188,8 +188,14 @@ def _seed_people(db: Session, tenant_id: str, request: Request) -> None:
             continue
         response = init_profile(
             db, tenant_id,
-            ProfileInitRequest(tenant_user_id=user_id, display_name=name, birth_date=date.fromisoformat(birthday),
-                               timezone="Asia/Shanghai", consent=Consent(profile=True, sensitive_inference=True)),
+            ProfileInitRequest(
+                tenant_user_id=user_id,
+                display_name=name,
+                birth_date=date.fromisoformat(birthday),
+                timezone="Asia/Shanghai",
+                enneagram=person.enneagram,
+                consent=Consent(profile=True, sensitive_inference=True),
+            ),
             pack, f"seed_{uuid.uuid4().hex}", f"seed-{tenant_id}-{user_id}",
         )
         user = find_user(db, tenant_id, user_id)

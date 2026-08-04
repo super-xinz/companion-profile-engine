@@ -24,6 +24,11 @@ def test_multi_person_profile_and_rule_workspaces():
             }
             assert template_ids <= {person["user_id"] for person in boot.json()["people"]}
 
+            for user_id, expected_code in (("person-1989-11-28", "SX/SO｜7w8"), ("person-1996-03-28", "SO/SX｜2w1")):
+                detail = client.get(f"/demo/api/people/{user_id}", headers=headers)
+                assert detail.status_code == 200, detail.text
+                assert detail.json()["profile"]["enneagram_profile"]["identity"]["code"] == expected_code
+
             disabled_template_id = "person-1988-08-09"
             with SessionLocal() as db:
                 disabled = db.scalar(select(User).where(
