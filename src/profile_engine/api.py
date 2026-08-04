@@ -33,6 +33,7 @@ from .schemas import (Consent, CorrectionRequest, ForgetRequest, MessageIngestRe
 from .service import (ConsentError, NotFoundError, VersionConflictError, correct_profile,
                       ensure_rule_pack, explain_profile, find_user, forget_profile, get_profile,
                       ingest_message, init_profile, request_id, set_enneagram_profile)
+from .workspace import _sync_template_people
 
 
 @asynccontextmanager
@@ -57,6 +58,10 @@ async def lifespan(app: FastAPI):
         if (not pack or "enneagram" not in pack.canonical_json
                 or (not settings.is_production and pack.sha256 != compiled.sha256)):
             pack = ensure_rule_pack(db, compiled)
+        tenant_ids = [row[0] for row in db.execute(select(User.tenant_id).distinct()).all()]
+        for tenant_id in tenant_ids:
+            _sync_template_people(db, tenant_id, pack, ensure_conversation=False)
+        db.commit()
         app.state.rule_pack_id = pack.id
     yield
 

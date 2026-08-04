@@ -7,7 +7,7 @@ from sqlalchemy import select
 from profile_engine.api import app
 from profile_engine.db import SessionLocal
 from profile_engine.demo import demo_auth
-from profile_engine.models import User
+from profile_engine.models import ProfileVersion, User
 
 
 def test_multi_person_profile_and_rule_workspaces():
@@ -28,6 +28,25 @@ def test_multi_person_profile_and_rule_workspaces():
                 detail = client.get(f"/demo/api/people/{user_id}", headers=headers)
                 assert detail.status_code == 200, detail.text
                 assert detail.json()["profile"]["enneagram_profile"]["identity"]["code"] == expected_code
+
+            with SessionLocal() as db:
+                target = db.scalar(select(ProfileVersion).where(
+                    ProfileVersion.user_id == db.scalar(select(User).where(
+                        User.tenant_id == tenant,
+                        User.tenant_user_id == "person-1996-03-28",
+                    )).id
+                ).order_by(ProfileVersion.version_no.desc()).limit(1))
+                assert target is not None
+                snapshot = target.snapshot
+                snapshot["enneagram_profile"] = {"status": "unassigned", "identity": {}}
+                target.snapshot = snapshot
+                db.commit()
+
+            refreshed = client.post("/demo/api/workspace/bootstrap", headers=headers)
+            assert refreshed.status_code == 200, refreshed.text
+            restored = client.get("/demo/api/people/person-1996-03-28", headers=headers)
+            assert restored.status_code == 200, restored.text
+            assert restored.json()["profile"]["enneagram_profile"]["identity"]["code"] == "SO/SX｜2w1"
 
             disabled_template_id = "person-1988-08-09"
             with SessionLocal() as db:

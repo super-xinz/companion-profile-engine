@@ -179,8 +179,37 @@ def _ensure_conversation(db: Session, user: User, external_id: str | None = None
     return item
 
 
+def _sync_template_people(db: Session, tenant_id: str, pack, ensure_conversation: bool = True) -> None:
+    for person in TEMPLATE_PEOPLE:
+        if not person.enneagram:
+            continue
+        user = db.scalar(select(User).where(User.tenant_id == tenant_id, User.tenant_user_id == person.user_id))
+        if not user:
+            continue
+        profile = get_profile(db, tenant_id, user.tenant_user_id)["profile"]
+        enneagram = profile.get("enneagram_profile", {})
+        desired_code = (
+            f"{person.enneagram['primary_instinct']}/{person.enneagram['secondary_instinct']}｜"
+            f"{person.enneagram['core_type']}w{person.enneagram['wing']}"
+        )
+        current_code = enneagram.get("identity", {}).get("code")
+        if enneagram.get("status") != "confirmed" or current_code != desired_code:
+            set_enneagram_profile(
+                db, tenant_id, user.tenant_user_id,
+                SetEnneagramRequest(
+                    expected_profile_version=current_version(db, user).version_no,
+                    enneagram=person.enneagram,
+                    reason="模板人物同步九型互动画像",
+                ),
+                pack, f"seed-sync_{uuid.uuid4().hex}", f"seed-sync-{tenant_id}-{user.tenant_user_id}",
+            )
+        if ensure_conversation:
+            _ensure_conversation(db, user, title=f"{person.display_name}的第一段对话")
+
+
 def _seed_people(db: Session, tenant_id: str, request: Request) -> None:
     pack = _current_pack(request, db)
+    _sync_template_people(db, tenant_id, pack)
     for person in TEMPLATE_PEOPLE:
         user_id, name, birthday = person.user_id, person.display_name, person.birth_date
         exists = db.scalar(select(User).where(User.tenant_id == tenant_id, User.tenant_user_id == user_id))
