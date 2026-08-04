@@ -9,6 +9,7 @@ from openpyxl import load_workbook
 
 
 DOMAIN_SHEETS = {"性格": "personality", "行为": "behavior", "做事工作": "work", "关系情感": "relationship"}
+PROPORTION_SHEET = "比例"
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,44 @@ def load_rule_index(workbook_path: str) -> dict[str, tuple[RuleFragment, ...]]:
     finally:
         wb.close()
     return {code: tuple(fragments) for code, fragments in index.items()}
+
+
+@lru_cache(maxsize=2)
+def load_domain_proportions(workbook_path: str) -> dict[str, tuple[float, ...]]:
+    path = Path(workbook_path)
+    if not path.exists():
+        return {}
+    wb = load_workbook(path, read_only=True, data_only=True)
+    proportions: dict[str, tuple[float, ...]] = {}
+    label_map = {
+        "性格": "personality",
+        "行为": "behavior",
+        "做事/事业": "work",
+        "关系/感情": "relationship",
+    }
+    try:
+        ws = wb[PROPORTION_SHEET]
+        rows = list(ws.iter_rows(values_only=True))
+        if len(rows) < 3:
+            return {}
+        for row_no, row in enumerate(rows):
+            label = str(row[0] or "").strip()
+            domain = label_map.get(label)
+            if not domain:
+                continue
+            ratios: list[float] = []
+            ratio_row = rows[row_no + 1] if row_no + 1 < len(rows) else ()
+            for value in ratio_row:
+                if value in (None, ""):
+                    continue
+                try:
+                    ratios.append(float(value))
+                except (TypeError, ValueError):
+                    ratios.append(0.0)
+            proportions[domain] = tuple(ratios)
+    finally:
+        wb.close()
+    return proportions
 
 
 def fragments_for_code(workbook_path: str, code: str) -> tuple[RuleFragment, ...]:

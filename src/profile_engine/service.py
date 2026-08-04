@@ -19,8 +19,8 @@ from .extractor import SemanticExtractor, get_semantic_extractor
 from .models import (AuditLog, CurrentState, ManualOverride, Memory, ProfileEvidence,
                      ProfileVersion, RulePack, RuntimePreference, User)
 from .profile import (GOLDEN_TRAITS, TRAIT_NAMES, BirthFeatureCalculator,
-                      build_initial_profile, clone_profile, find_trait, flattened_traits,
-                      rebuild_derived, recalculate_meta)
+                      build_initial_profile, build_profile_table_view, clone_profile,
+                      find_trait, flattened_traits, rebuild_derived, recalculate_meta)
 from .rule_compiler import CompiledRulePack
 from .rule_bank import extract_signals, fragments_for_code
 from .schemas import (CorrectionRequest, ForgetRequest, MessageIngestRequest, ProfileInitRequest,
@@ -248,6 +248,7 @@ def get_profile(db: Session, tenant_id: str, tenant_user_id: str) -> dict:
     profile["runtime"]["current_state"] = {x.state_key: {**x.value, "expires_at": x.expires_at.isoformat()} for x in active_states}
     profile["runtime"]["interaction_preferences"] = {x.preference_key: x.value.get("value") for x in preferences}
     profile["runtime"]["memories"] = [{"memory_id": x.id, "type": x.memory_type, **x.content} for x in memories]
+    profile["table_view"] = build_profile_table_view(profile)
     return {"profile_version": version.version_no, "profile": profile,
             "rule_pack_versions": {"cold_start": version.cold_start_rule_pack_version, "dialogue": version.dialogue_rule_pack_version}}
 

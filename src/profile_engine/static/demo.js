@@ -350,6 +350,7 @@ function renderProfile(overrides = []) {
   const sourceDocument = profile.source_profile_document;
   const enneagram = profile.enneagram_profile || {status: "unassigned", identity: {}, layers: {}, interaction_strategy: {}};
   const digitalCode = profile.digital_code_profile || {status: "unassigned", domains: {}};
+  const tableView = profile.table_view || null;
   const portraitLabels = {
     essence: "本质", strengths: "优势", weaknesses: "弱点",
     core_tension: "核心矛盾", suitable_roles: "适合角色"
@@ -361,6 +362,19 @@ function renderProfile(overrides = []) {
       <div class="profile-stat"><small>MBTI 推导</small><b>${esc(profile.mbti_dimensions?.type_label || "XXXX")}</b></div>
       <div class="profile-stat"><small>长期记忆</small><b>${memories.length}</b></div>
     </div>
+    ${tableView ? `
+    <div class="trait-section">
+      <div class="section-heading"><b>统一画像视图</b><small>面向交付的一体化出口</small></div>
+      <div class="inspector-card"><div class="data-grid">
+        <label>数字密码</label><span>${esc(tableView.digital_code_profile?.code || "未生成")}</span>
+        <label>九型人格</label><span>${esc(tableView.enneagram_profile?.identity?.code || "未确认")}</span>
+        <label>核心维度</label><span>${Object.keys(tableView.core_traits || {}).length} 组</span>
+        <label>行为画像</label><span>${Object.keys(tableView.behavior_style || {}).length} 组</span>
+        <label>语言画像</label><span>${Object.keys(tableView.language_style || {}).length} 组</span>
+        <label>人物画像</label><span>${Object.keys(tableView.portrait || {}).length} 项</span>
+      </div></div>
+      <div class="inspector-card source-portrait"><b>整合摘要</b><p>${esc(tableView.portrait?.essence?.content || digitalCode.provenance?.source_file || "暂无摘要")}</p></div>
+    </div>` : ""}
     <div class="trait-section">
       <div class="section-heading"><b>九型互动画像</b><small>明确输入后派生，不从普通对话自动判断</small><button class="button soft edit-enneagram">设置/更新</button></div>
       ${enneagram.status === "confirmed" ? `

@@ -23,6 +23,9 @@ def test_workbook_builds_four_weighted_digital_code_domains():
     assert set(model["domains"]) == {"personality", "behavior", "work", "relationship"}
     assert all(domain["components"] and domain["summary"] for domain in model["domains"].values())
     assert all(0 < item["weight"] <= 1 for domain in model["domains"].values() for item in domain["components"])
+    assert all(domain["summary_coverage_weight"] >= 0.99 for domain in model["domains"].values())
+    assert all("比例" in domain["proportion_source"]["sheet"] for domain in model["domains"].values())
+    assert all("综合画像" in domain["summary"] for domain in model["domains"].values())
 
 
 def test_supported_birth_dates_cover_the_complete_workbook_code_set():

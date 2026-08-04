@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from .rule_bank import RuleFragment
+from .rule_bank import RuleFragment, load_domain_proportions
 
 
 ALGORITHM_VERSION = "birth-groups-digital-root-v1"
@@ -60,11 +60,26 @@ def _summary(label: str, code: str, components: list[dict[str, Any]]) -> tuple[s
             continue
         seen.add(normalized)
         selected.append({**item, "text": normalized[:240]})
-        if len(selected) == 5:
-            break
     coverage = round(sum(item["weight"] for item in selected), 4)
-    details = "；".join(f"{item['label']}：{item['text']}" for item in selected)
-    return f"数字密码 {code} 的{label}高贡献信息为：{details}", coverage
+    tiers = {
+        "主导": [],
+        "支撑": [],
+        "补充": [],
+    }
+    for item in selected:
+        weight = item["weight"]
+        content = f"{item['label']}（{round(weight * 100)}%）{item['text']}"
+        if weight >= 0.08:
+            tiers["主导"].append(content)
+        elif weight >= 0.03:
+            tiers["支撑"].append(content)
+        else:
+            tiers["补充"].append(content)
+    details = []
+    for tier_name in ("主导", "支撑", "补充"):
+        if tiers[tier_name]:
+            details.append(f"{tier_name}项：" + "；".join(tiers[tier_name]))
+    return f"数字密码 {code} 的{label}综合画像：" + "；".join(details), coverage
 
 
 def build_digital_code_profile(
@@ -74,19 +89,35 @@ def build_digital_code_profile(
 ) -> dict[str, Any]:
     if not code or not fragments:
         return empty_digital_code_profile()
+    source_file = "数字学画像2.xlsx"
+    source_path = None
+    try:
+        from .config import get_settings
+        from pathlib import Path
+
+        source_dir = get_settings().rule_source_dir
+        if not source_dir.is_absolute():
+            source_dir = (Path.cwd() / source_dir).resolve()
+        source_path = str(source_dir.parent / source_file)
+    except Exception:
+        source_path = None
+    proportions = load_domain_proportions(source_path) if source_path else {}
     domains: dict[str, Any] = {}
     for domain, label in DOMAIN_LABELS.items():
         components = []
+        domain_proportions = proportions.get(domain, ())
         for fragment in fragments:
             if fragment.domain != domain:
                 continue
             field_index = fragment.source_column // 2 - 1
             field_key = FIELD_KEYS[field_index] if 0 <= field_index < len(FIELD_KEYS) else fragment.source_field
+            sheet_ratio = domain_proportions[field_index] if 0 <= field_index < len(domain_proportions) else fragment.normalized_weight
             components.append({
                 "field": field_key,
                 "label": fragment.source_field,
                 "text": fragment.text,
                 "weight": round(fragment.normalized_weight, 6),
+                "sheet_ratio": round(float(sheet_ratio), 6),
                 "source_column": fragment.source_column,
             })
         summary, coverage = _summary(label, code, components)
@@ -95,6 +126,11 @@ def build_digital_code_profile(
             "summary": summary,
             "summary_coverage_weight": coverage,
             "components": sorted(components, key=lambda item: item["source_column"]),
+            "proportion_source": {
+                "sheet": "比例",
+                "sheet_sha256": workbook_sha256,
+                "source_file": source_file,
+            },
         }
     return {
         "status": "derived",
@@ -106,9 +142,10 @@ def build_digital_code_profile(
             "source_file": "数字学画像2.xlsx",
             "source_sha256": workbook_sha256,
             "source_row_key": code,
-            "summary_generation": "deterministic_weighted_extract_v1",
+            "summary_generation": "deterministic_weighted_synthesis_v2",
+            "proportion_sheet": "比例",
         },
-        "maintenance_note": "四类画像保留全部加权成分；摘要仅提炼高贡献项，用户事实和后续证据优先。",
+        "maintenance_note": "四类画像保留全部加权成分；摘要按比例表做完整综合，用户事实和后续证据优先。",
     }
 
 

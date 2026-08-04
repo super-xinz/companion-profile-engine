@@ -166,6 +166,39 @@ def derive_portrait(profile: dict) -> dict:
     }
 
 
+def build_profile_table_view(profile: dict) -> dict:
+    traits = flattened_traits(profile)
+    return {
+        "identity": profile.get("identity", {}),
+        "birth_analysis": profile.get("birth_analysis", {}),
+        "digital_code_profile": {
+            "status": profile.get("digital_code_profile", {}).get("status"),
+            "code": profile.get("digital_code_profile", {}).get("code"),
+            "confidence": profile.get("digital_code_profile", {}).get("confidence"),
+            "domains": {
+                key: {
+                    "label": value.get("label"),
+                    "summary": value.get("summary"),
+                    "summary_coverage_weight": value.get("summary_coverage_weight"),
+                }
+                for key, value in profile.get("digital_code_profile", {}).get("domains", {}).items()
+            },
+        },
+        "enneagram_profile": {
+            "status": profile.get("enneagram_profile", {}).get("status"),
+            "identity": profile.get("enneagram_profile", {}).get("identity", {}),
+            "confidence": profile.get("enneagram_profile", {}).get("confidence"),
+            "interaction_strategy": profile.get("enneagram_profile", {}).get("interaction_strategy", {}),
+        },
+        "core_traits": {key: {"value": value["value"], "confidence": value["confidence"]} for key, value in traits.items()},
+        "behavior_style": profile.get("behavior_style", {}),
+        "language_style": profile.get("language_style", {}),
+        "portrait": profile.get("portrait", {}),
+        "runtime": profile.get("runtime", {}),
+        "meta": profile.get("meta", {}),
+    }
+
+
 def build_initial_profile(
     user_id: str,
     display_name: str | None,
@@ -208,6 +241,7 @@ def build_initial_profile(
     profile["behavior_style"] = derive_behavior(profile, schema)
     profile["language_style"] = derive_language(profile, schema)
     profile["portrait"] = derive_portrait(profile)
+    profile["table_view"] = build_profile_table_view(profile)
     recalculate_meta(profile)
     return profile, warnings
 
@@ -223,8 +257,9 @@ def rebuild_derived(profile: dict, schema: dict) -> list[str]:
     profile["behavior_style"] = derive_behavior(profile, schema)
     profile["language_style"] = derive_language(profile, schema)
     profile["portrait"] = derive_portrait(profile)
+    profile["table_view"] = build_profile_table_view(profile)
     recalculate_meta(profile)
-    return ["mbti_dimensions", "behavior_style", "language_style", "portrait"]
+    return ["mbti_dimensions", "behavior_style", "language_style", "portrait", "table_view"]
 
 
 def clone_profile(profile: dict) -> dict:
