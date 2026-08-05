@@ -40,11 +40,11 @@ def test_model_catalog_exposes_six_openrouter_models(monkeypatch):
     monkeypatch.setattr("profile_engine.model_gateway.get_settings", lambda: settings)
     expected_models = {
         "deepseek": "deepseek/deepseek-v3.2",
-        "claude": "~anthropic/claude-sonnet-latest",
-        "gpt": "~openai/gpt-latest",
+        "claude": "anthropic/claude-sonnet-5",
+        "gpt": "openai/gpt-5.6-sol",
         "glm": "z-ai/glm-5.2",
-        "gemini": "~google/gemini-pro-latest",
-        "kimi": "~moonshotai/kimi-latest",
+        "gemini": "google/gemini-3.1-pro-preview",
+        "kimi": "moonshotai/kimi-k3",
     }
 
     assert set(MODEL_PROVIDERS) == set(expected_models)
@@ -53,11 +53,11 @@ def test_model_catalog_exposes_six_openrouter_models(monkeypatch):
     assert all(item["route"] == "OpenRouter" and item["available"] for item in options)
     assert {item["provider"]: item["label"] for item in options} == {
         "deepseek": "DeepSeek V3.2",
-        "claude": "Anthropic Claude Sonnet Latest",
-        "gpt": "OpenAI GPT Latest",
+        "claude": "Anthropic Claude Sonnet 5",
+        "gpt": "OpenAI GPT-5.6 Sol",
         "glm": "Z.ai GLM 5.2",
-        "gemini": "Google Gemini Pro Latest",
-        "kimi": "Moonshot Kimi Latest",
+        "gemini": "Google Gemini 3.1 Pro Preview",
+        "kimi": "Moonshot Kimi K3",
     }
     for provider, model in expected_models.items():
         endpoint = get_model_endpoint(provider)

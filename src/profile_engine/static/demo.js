@@ -52,7 +52,10 @@ async function api(path, options = {}) {
   if (!response.ok) {
     let message = payload.detail || payload.message || `请求失败（${response.status}）`;
     if (typeof message === "object") message = message.message || JSON.stringify(message);
-    throw new Error(message);
+    const error = new Error(message);
+    error.payload = payload;
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }
@@ -251,8 +254,19 @@ async function sendMessage() {
     await refreshPeople();
   } catch (error) {
     setTyping(false);
-    appendMessage("system", `本轮处理失败：${error.message}`);
-    toast(error.message);
+    if (error.payload?.code === "model_no_response") {
+      const details = error.payload.details || {};
+      appendMessage("system", error.message);
+      appState.version = details.profile_version || appState.version;
+      appState.lastEngine = details.engine || appState.lastEngine;
+      renderTurn();
+      await reloadProfile();
+      await refreshPeople();
+      toast("模型无返回");
+    } else {
+      appendMessage("system", `本轮处理失败：${error.message}`);
+      toast(error.message);
+    }
   } finally {
     appState.busy = false;
     $("#sendBtn").disabled = false;

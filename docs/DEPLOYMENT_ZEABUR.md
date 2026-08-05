@@ -38,11 +38,11 @@
 | `PROFILE_OPENROUTER_API_KEY` | 是 | 是 | 所有模型共用的 OpenRouter 密钥 |
 | `PROFILE_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1` | 是 | 否 | OpenRouter 兼容接口 |
 | `PROFILE_DEEPSEEK_MODEL=deepseek/deepseek-v3.2` | 是 | 否 | 固定 DeepSeek V3.2 |
-| `PROFILE_CLAUDE_MODEL=~anthropic/claude-sonnet-latest` | 是 | 否 | Claude Sonnet 路由，可固定具体版本 |
-| `PROFILE_GPT_MODEL=~openai/gpt-latest` | 是 | 否 | OpenRouter GPT 最新路由 |
+| `PROFILE_CLAUDE_MODEL=anthropic/claude-sonnet-5` | 是 | 否 | Claude Sonnet 5 固定模型 |
+| `PROFILE_GPT_MODEL=openai/gpt-5.6-sol` | 是 | 否 | GPT-5.6 Sol 固定模型 |
 | `PROFILE_GLM_MODEL=z-ai/glm-5.2` | 是 | 否 | OpenRouter GLM 5.2 |
-| `PROFILE_GEMINI_MODEL=~google/gemini-pro-latest` | 是 | 否 | OpenRouter Gemini Pro 最新路由 |
-| `PROFILE_KIMI_MODEL=~moonshotai/kimi-latest` | 是 | 否 | OpenRouter Kimi 最新路由 |
+| `PROFILE_GEMINI_MODEL=google/gemini-3.1-pro-preview` | 是 | 否 | Gemini 3.1 Pro Preview 固定模型 |
+| `PROFILE_KIMI_MODEL=moonshotai/kimi-k3` | 是 | 否 | Kimi K3 固定模型 |
 | `PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true` | 是 | 否 | 取得同意后启用 |
 
 ## 域名与服务访问
@@ -57,7 +57,7 @@
 4. 用有效 Key 初始化、读取、摄取、读取新版本、重置均成功。
 5. PostgreSQL/Service 重启后画像仍存在。
 6. 日志只包含 request_id、path、状态和耗时，不含 Key/Header/完整画像。
-7. `GET /v1/capabilities` 返回服务 0.5.1、API v1、Schema、规则包与可选模型配置。
+7. `GET /v1/capabilities` 返回服务 0.5.2、API v1、Schema、规则包与可选模型配置。
 8. 客户生产环境的 `/demo`、`/rules`、`/docs` 与 `:reset` 均不可访问。
 
 ## 更新与回滚

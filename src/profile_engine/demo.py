@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
+from starlette.responses import JSONResponse
 
 from .config import get_settings
 from .db import get_db
@@ -69,14 +70,52 @@ def _current_pack(request: Request, db: Session) -> RulePack:
     return pack
 
 
-def _fallback_reply(text: str, hints: dict) -> str:
-    if any(marker in text for marker in ("回答短一点", "说短一点", "简短一点", "听我把话说完")):
-        return "明白了。之后我会尽量简短，也会先听你说完。你继续。"
-    if hints.get("empathy_first"):
-        return f"听起来这件事确实让你有些不好受。关于“{text[:32]}”，你更希望我先陪你聊聊，还是一起想个办法？"
-    if hints.get("allow_resume_later"):
-        return "听起来你现在有点累，我们先不用急着解决所有事情。要不要只说说此刻最困扰你的那一点？"
-    return "我听到了。你愿意再多说一点，这件事对你最重要的部分是什么吗？"
+class ModelNoResponseError(RuntimeError):
+    def __init__(self, message: str, *, provider: ModelProvider, model: str,
+                 http_status: int | None = None, upstream_message: str | None = None):
+        super().__init__(message)
+        self.provider = provider
+        self.model = model
+        self.http_status = http_status
+        self.upstream_message = upstream_message
+
+
+def _upstream_error_message(response: httpx.Response) -> str | None:
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        return error["message"].strip()[:500] or None
+    if isinstance(error, str):
+        return error.strip()[:500] or None
+    return None
+
+
+def _no_response_error(endpoint, exc: Exception) -> ModelNoResponseError:
+    status = None
+    upstream_message = None
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        upstream_message = _upstream_error_message(exc.response)
+        reason = f"OpenRouter HTTP {status}"
+    elif isinstance(exc, httpx.RequestError):
+        reason = f"OpenRouter 网络无响应（{type(exc).__name__}）"
+    elif isinstance(exc, ModelConfigurationError):
+        reason = str(exc)
+    else:
+        reason = "OpenRouter 返回内容中没有有效回复"
+    message = f"{endpoint.label}（{endpoint.model}）模型无返回：{reason}"
+    if upstream_message:
+        message += f"；{upstream_message}"
+    return ModelNoResponseError(
+        message,
+        provider=endpoint.provider,
+        model=endpoint.model,
+        http_status=status,
+        upstream_message=upstream_message,
+    )
 
 
 def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
@@ -84,10 +123,13 @@ def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
     hints = engine["reply_hints"]
     try:
         endpoint = get_model_endpoint(provider)
-    except ModelConfigurationError:
-        return _fallback_reply(text, hints), "fallback-v1"
+    except ModelConfigurationError as exc:
+        raise ModelNoResponseError(
+            f"{provider} 模型无返回：{exc}", provider=provider, model="未配置"
+        ) from exc
     if not endpoint.api_key:
-        return _fallback_reply(text, hints), "fallback-v1"
+        exc = ModelConfigurationError("未配置 OpenRouter API Key")
+        raise _no_response_error(endpoint, exc) from exc
     portrait = profile.get("portrait", {})
     digital_code = profile.get("digital_code_profile", {})
     internal_context = {
@@ -132,8 +174,8 @@ def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
             max_tokens=320,
         )
         return reply, f"{provider}:{resolved_model}"
-    except (httpx.HTTPError, ModelConfigurationError, KeyError, IndexError, ValueError):
-        return _fallback_reply(text, hints), "fallback-v1"
+    except (httpx.HTTPError, ModelConfigurationError, KeyError, IndexError, ValueError) as exc:
+        raise _no_response_error(endpoint, exc) from exc
 
 
 @router.post("/start")
@@ -227,8 +269,30 @@ def demo_chat(body: DemoChatRequest, request: Request, tenant_id: str = Depends(
         )
         engine["strategy_trace"]["semantic_fallback"] = f"{body.model_provider}_unavailable"
     current = get_profile(db, tenant_id, body.user_id)["profile"]
-    reply, responder = _generate_reply(body.text, body.history, current, engine, body.model_provider)
     engine["strategy_trace"]["model_provider"] = body.model_provider
+    try:
+        reply, responder = _generate_reply(body.text, body.history, current, engine, body.model_provider)
+    except ModelNoResponseError as exc:
+        engine["strategy_trace"]["consumed_by_chatbot"] = False
+        engine["strategy_trace"]["chat_responder"] = "no-response"
+        engine["strategy_trace"]["chat_model_error"] = {
+            "provider": exc.provider,
+            "model": exc.model,
+            "http_status": exc.http_status,
+        }
+        return JSONResponse(status_code=502, content={
+            "request_id": request.state.request_id,
+            "code": "model_no_response",
+            "message": str(exc),
+            "details": {
+                "provider": exc.provider,
+                "model": exc.model,
+                "http_status": exc.http_status,
+                "upstream_message": exc.upstream_message,
+                "profile_version": engine["profile_version"],
+                "engine": engine,
+            },
+        })
     engine["strategy_trace"]["consumed_by_chatbot"] = True
     engine["strategy_trace"]["chat_responder"] = responder
     assistant_message_id = f"assistant_{body.message_id}"

@@ -22,7 +22,7 @@ def test_b2b_capabilities_security_headers_and_api_key_challenge():
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["api_version"] == "v1"
-        assert body["service_version"] == "0.5.1"
+        assert body["service_version"] == "0.5.2"
         assert [item["provider"] for item in body["model_config"]["options"]] == list(MODEL_PROVIDERS)
         assert body["limits"]["requests_per_minute"] >= 1
         assert response.headers["x-api-version"] == "1"

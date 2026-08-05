@@ -24,11 +24,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     deepseek_model: str = "deepseek/deepseek-v3.2"
-    claude_model: str = "~anthropic/claude-sonnet-latest"
-    gpt_model: str = "~openai/gpt-latest"
+    claude_model: str = "anthropic/claude-sonnet-5"
+    gpt_model: str = "openai/gpt-5.6-sol"
     glm_model: str = "z-ai/glm-5.2"
-    gemini_model: str = "~google/gemini-pro-latest"
-    kimi_model: str = "~moonshotai/kimi-latest"
+    gemini_model: str = "google/gemini-3.1-pro-preview"
+    kimi_model: str = "moonshotai/kimi-k3"
     openrouter_site_url: str | None = None
     openrouter_app_name: str = "Companion Profile Engine"
     model_timeout_seconds: float = 30.0

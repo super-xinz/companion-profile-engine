@@ -34,6 +34,8 @@ sequenceDiagram
 
 仓库内 `/demo` 页面就是上述编排的可运行 Demo：其后端 `/demo/api/chat` 先调用画像引擎，再读取更新后的画像和回答策略，最后调用界面所选的 DeepSeek、Claude、GPT、GLM、Gemini 或 Kimi 生成回复。所有模型均经 OpenRouter，浏览器不会直接持有画像 API Key 或模型 API Key。
 
+模型网络请求失败或 OpenRouter 返回 4xx/5xx 时，`/demo/api/chat` 返回 `502` 和 `code=model_no_response`，并在 `details` 中提供具体模型 ID、上游 HTTP 状态及画像版本。系统不会生成、展示或保存兜底助手回复。
+
 ## 2. 启动
 
 ### Windows PowerShell

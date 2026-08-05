@@ -1,11 +1,31 @@
+import httpx
 from fastapi.testclient import TestClient
 
 from profile_engine.api import app
 from profile_engine.demo import demo_auth
 from profile_engine.extractor import SemanticExtractorError
+from profile_engine.model_gateway import ModelEndpoint
 
 
-def test_demo_page_and_conversation_flow():
+def _available_endpoint(provider="deepseek"):
+    return ModelEndpoint(
+        provider=provider,
+        label="DeepSeek V3.2",
+        route_label="OpenRouter",
+        api_key="test-openrouter-key",
+        base_url="https://openrouter.example/v1",
+        model="deepseek/deepseek-v3.2",
+        timeout=30,
+        extra_headers={},
+    )
+
+
+def test_demo_page_and_conversation_flow(monkeypatch):
+    monkeypatch.setattr("profile_engine.demo.get_model_endpoint", _available_endpoint)
+    monkeypatch.setattr(
+        "profile_engine.demo.chat_completion",
+        lambda *_args, **_kwargs: ("明白了，我会先听你说完。", "deepseek/deepseek-v3.2"),
+    )
     app.dependency_overrides[demo_auth] = lambda: "demo-test-tenant"
     try:
         with TestClient(app) as client:
@@ -56,6 +76,11 @@ def test_demo_chat_falls_back_when_selected_model_semantic_extraction_fails(monk
             raise SemanticExtractorError("DeepSeek V3.2 语义抽取失败: HTTP 429")
 
     monkeypatch.setattr("profile_engine.service.get_semantic_extractor", lambda *_: FailingExtractor())
+    monkeypatch.setattr("profile_engine.demo.get_model_endpoint", _available_endpoint)
+    monkeypatch.setattr(
+        "profile_engine.demo.chat_completion",
+        lambda *_args, **_kwargs: ("你继续说，我会认真听。", "deepseek/deepseek-v3.2"),
+    )
     app.dependency_overrides[demo_auth] = lambda: "demo-fallback-test-tenant"
     try:
         with TestClient(app) as client:
@@ -73,5 +98,42 @@ def test_demo_chat_falls_back_when_selected_model_semantic_extraction_fails(monk
             assert body["assistant_reply"]
             assert body["engine"]["semantic_extractor_version"] == "deterministic-zh-v1"
             assert body["engine"]["strategy_trace"]["semantic_fallback"] == "deepseek_unavailable"
+    finally:
+        app.dependency_overrides.pop(demo_auth, None)
+
+
+def test_demo_chat_returns_real_model_no_response_without_fallback(monkeypatch):
+    monkeypatch.setattr("profile_engine.demo.get_model_endpoint", _available_endpoint)
+
+    def fail_with_403(*_args, **_kwargs):
+        request = httpx.Request("POST", "https://openrouter.example/v1/chat/completions")
+        response = httpx.Response(403, request=request, json={
+            "error": {"message": "Access denied from this region"},
+        })
+        raise httpx.HTTPStatusError("403 Forbidden", request=request, response=response)
+
+    monkeypatch.setattr("profile_engine.demo.chat_completion", fail_with_403)
+    app.dependency_overrides[demo_auth] = lambda: "demo-no-response-test-tenant"
+    try:
+        with TestClient(app) as client:
+            session = client.post("/demo/api/start", json={"display_name": "无返回测试用户"}).json()
+            turn = client.post("/demo/api/chat", json={
+                "user_id": session["user_id"],
+                "conversation_id": session["conversation_id"],
+                "message_id": "no-response-message-1",
+                "expected_profile_version": 1,
+                "text": "测试网络失败",
+                "history": [],
+            })
+            assert turn.status_code == 502, turn.text
+            body = turn.json()
+            assert body["code"] == "model_no_response"
+            assert "模型无返回：OpenRouter HTTP 403" in body["message"]
+            assert "fallback" not in body["message"].lower()
+            assert body["details"]["provider"] == "deepseek"
+            assert body["details"]["model"] == "deepseek/deepseek-v3.2"
+            assert body["details"]["http_status"] == 403
+            assert body["details"]["upstream_message"] == "Access denied from this region"
+            assert body["details"]["engine"]["strategy_trace"]["chat_responder"] == "no-response"
     finally:
         app.dependency_overrides.pop(demo_auth, None)
