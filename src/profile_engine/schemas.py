@@ -139,8 +139,8 @@ class ReplyGuidance(BaseModel):
     tone: str = Field(default="natural", max_length=100)
     empathy_first: bool = False
     answer_first: bool = False
-    max_sentences: int = Field(default=5, ge=1, le=8)
-    question_count: int = Field(default=1, ge=0, le=2)
+    max_sentences: int = Field(default=4, ge=1, le=8)
+    question_count: int = Field(default=0, ge=0, le=2)
     structure_level: Literal["simple", "steps", "flexible_options"] = "simple"
     focus: str = Field(default="respond_to_current_message", max_length=300)
     avoid: list[str] = Field(default_factory=list, max_length=8)

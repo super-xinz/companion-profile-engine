@@ -1,8 +1,16 @@
 from fastapi.testclient import TestClient
 
 from profile_engine.api import app
-from profile_engine.demo import demo_auth
-from profile_engine.extractor import SemanticExtractorError
+from profile_engine.demo import _fallback_reply, demo_auth
+from profile_engine.extractor import DeterministicSemanticExtractor, SemanticExtractorError
+
+
+def test_casual_chat_does_not_force_a_closing_question():
+    guidance = DeterministicSemanticExtractor().analyze("我最近有点想去看看闺蜜").reply_guidance
+    assert guidance.question_count == 0
+    for hints in ({}, {"empathy_first": True}, {"allow_resume_later": True}):
+        reply = _fallback_reply("我最近有点想去看看闺蜜", hints)
+        assert not reply.endswith(("?", "？"))
 
 
 def test_demo_page_and_conversation_flow():

@@ -308,7 +308,7 @@ function renderTurn(mode = "ready") {
     ${!patches.length && !operations.length ? `<div class="inspector-card"><div class="inspector-card-title"><b>本轮保持画像不变</b><span class="tag gray">审慎模式</span></div><small>证据不足或字段已被人工锁定时，系统不会更新长期画像。</small></div>` : ""}
     <div class="section-heading"><b>回答策略如何变化</b><small>已被 Chatbot 消费</small></div>
     <div class="inspector-card"><div class="inspector-card-title"><b>${esc(hints.focus || "回应当前消息")}</b><span class="tag">${engine.strategy_trace?.consumed_by_chatbot ? "已消费" : "待消费"}</span></div>
-      <div class="data-grid"><label>语气</label><span>${esc(hints.tone || "自然")}</span><label>最长</label><span>${hints.max_sentences || 5} 句</span><label>提问</label><span>${hints.question_count ?? 1} 个</span><label>结构</label><span>${esc(hints.structure_level || "simple")}</span></div>
+      <div class="data-grid"><label>语气</label><span>${esc(hints.tone || "自然")}</span><label>最长</label><span>${hints.max_sentences || 4} 句</span><label>提问</label><span>${hints.question_count ?? 0} 个</span><label>结构</label><span>${esc(hints.structure_level || "simple")}</span></div>
     </div>`;
 }
 

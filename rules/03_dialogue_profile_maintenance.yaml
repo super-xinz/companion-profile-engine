@@ -747,15 +747,15 @@ reply_hint_generation:
   safety_priority: "highest"
   rules:
     - condition: "runtime.current_state.stress_level >= 0.70"
-      output: { max_sentences: 3, empathy_first: true, question_count: 1, humor_level: 0.0 }
+      output: { max_sentences: 3, empathy_first: true, question_count: 0, humor_level: 0.0 }
     - condition: "runtime.current_state.energy_level <= 0.30"
       output: { structure_level: "simple", action_count: 1, allow_resume_later: true }
     - condition: "runtime.interaction_preferences.response_length == short"
       output: { max_sentences: 3, answer_first: true }
     - condition: "core_traits.structure_pref.value >= 0.67"
-      output: { structure_level: "steps", options_max: 3 }
+      output: { organization_preference: "structured_when_helpful", options_max: 3 }
     - condition: "core_traits.structure_pref.value <= 0.33"
-      output: { structure_level: "flexible_options", avoid_rigid_plan: true }
+      output: { organization_preference: "flexible_when_helpful", avoid_rigid_plan: true }
     - condition: "core_traits.empathy.value >= 0.67 or runtime.interaction_preferences.empathy_first >= 0.67"
       output: { empathy_first: true, ask_support_or_solution: true }
     - condition: "core_traits.thinking_ratio.value >= 0.67"
@@ -765,7 +765,7 @@ reply_hint_generation:
     - condition: "core_traits.confidence.value <= 0.33"
       output: { use_specific_acknowledgement: true, avoid_global_judgment: true }
     - condition: "profile.overall_confidence < 0.40"
-      output: { use_tentative_language: true, calibration_question_count: 1 }
+      output: { use_tentative_language: true, calibration_question_count: 0, calibrate_only_when_naturally_relevant: true }
 
 generalized_examples:
   - input: "我今天开了一天会，现在只想自己待会儿。"

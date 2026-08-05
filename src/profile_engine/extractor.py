@@ -96,6 +96,7 @@ class DeterministicSemanticExtractor:
             answer_first=text.rstrip().endswith(("?", "？", "吗")),
             empathy_first=any(x in text for x in ("难过", "焦虑", "压力", "很累")),
             max_sentences=3 if any(x in text for x in ("短一点", "简短")) else 5,
+            question_count=0,
             focus="直接回应用户当前表达",
         )
         return SemanticAnalysis(frames=frames, trait_signals=signals, reply_guidance=guidance)
@@ -139,6 +140,8 @@ assertiveness、confidence、empathy 或任何其他长期人格 trait_signal；
 reply_guidance 必须包含：intent, tone, empathy_first, answer_first, max_sentences(1到8),
 question_count(0到2), structure_level(simple|steps|flexible_options), focus, avoid(字符串数组), requires_fresh_information(布尔)。
 回答策略应结合当前意图；涉及“最近、行情、价格、政策、风口”等时 requires_fresh_information=true。
+question_count 默认必须为0。只有回答确实依赖缺失信息，或用户明确邀请继续探索时才设为1；不要为了延续对话而追问，
+不要连续使用“你觉得呢”“你希望……还是……”或“要不要……”式收尾。普通分享、情绪表达和闲聊应允许自然回应后结束。
 
 必须正确处理否定、双重否定、转折、引用、别人作为主体、短期状态和长期习惯。无法确认时降低置信度；知识问答的 frames 和 trait_signals 可为空。
 输出必须是可解析 JSON，不要使用 Markdown。"""

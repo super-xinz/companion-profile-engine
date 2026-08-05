@@ -476,8 +476,8 @@ def _reply_hints(profile: dict, interaction_strategy: dict | None = None) -> tup
     prefs = profile["runtime"].get("interaction_preferences", {})
     states = profile["runtime"].get("current_state", {})
     locked_fields: set[str] = set()
-    hints: dict[str, Any] = {"max_sentences": 5, "answer_first": False, "empathy_first": False,
-                             "question_count": 1, "structure_level": "simple", "humor_level": prefs.get("humor_level", 0.2)}
+    hints: dict[str, Any] = {"max_sentences": 4, "answer_first": False, "empathy_first": False,
+                             "question_count": 0, "structure_level": "simple", "humor_level": prefs.get("humor_level", 0.2)}
     if interaction_strategy:
         strategy_hints = interaction_strategy.get("hints", {})
         hints.update(strategy_hints)
@@ -503,14 +503,16 @@ def _reply_hints(profile: dict, interaction_strategy: dict | None = None) -> tup
         locked_fields.update({"structure_level", "action_count", "allow_resume_later"})
     structure = find_trait(profile, "structure_pref")["value"]
     if structure >= 0.67:
-        hints.update(structure_level="steps", options_max=3)
-        locked_fields.update({"structure_level", "options_max"})
+        hints.update(organization_preference="structured_when_helpful", options_max=3)
+        locked_fields.update({"organization_preference", "options_max"})
     elif structure <= 0.33:
-        hints.update(structure_level="flexible_options", avoid_rigid_plan=True)
-        locked_fields.update({"structure_level", "avoid_rigid_plan"})
+        hints.update(organization_preference="flexible_when_helpful", avoid_rigid_plan=True)
+        locked_fields.update({"organization_preference", "avoid_rigid_plan"})
     if profile["meta"]["overall_confidence"] < 0.4:
-        hints.update(use_tentative_language=True, calibration_question_count=1)
-        locked_fields.update({"use_tentative_language", "calibration_question_count"})
+        hints.update(use_tentative_language=True, calibration_question_count=0,
+                     calibrate_only_when_naturally_relevant=True)
+        locked_fields.update({"use_tentative_language", "calibration_question_count",
+                              "calibrate_only_when_naturally_relevant"})
     return hints, locked_fields
 
 
