@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import logging
 import time
-from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from importlib.resources import files
-from math import ceil
 from pathlib import Path
-from threading import Lock
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, Security
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -28,10 +24,11 @@ from .models import IdempotencyRecord, RulePack, User
 from .extractor import SemanticExtractorError
 from .model_gateway import public_model_options
 from .rule_compiler import compile_rule_pack
+from .security import SlidingWindowRateLimiter, constant_time_equal, safe_request_id
 from .schemas import (Consent, CorrectionRequest, ForgetRequest, MessageIngestRequest,
                       ProfileInitRequest, ResetProfileRequest, SetEnneagramRequest)
 from .service import (ConsentError, NotFoundError, VersionConflictError, correct_profile,
-                      ensure_rule_pack, explain_profile, find_user, forget_profile, get_profile,
+                      ensure_rule_pack, explain_profile, forget_profile, get_profile,
                       ingest_message, init_profile, request_id, set_enneagram_profile)
 from .workspace import _sync_template_people
 
@@ -84,22 +81,59 @@ logger = logging.getLogger("profile_engine.api")
 logger.setLevel(logging.INFO)
 
 
-@app.middleware("http")
-async def attach_request_id(request: Request, call_next):
-    started = time.perf_counter()
-    req_id = request.headers.get("X-Request-ID") or request_id()
-    request.state.request_id = req_id
-    response = await call_next(request)
+def _apply_security_headers(response: Response, request: Request, req_id: str, settings) -> None:
     response.headers["X-Request-ID"] = req_id
     response.headers["X-API-Version"] = "1"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.path == "/docs":
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "img-src 'self' data: https://fastapi.tiangolo.com; connect-src 'self'; "
+            "font-src 'self' https://cdn.jsdelivr.net; base-uri 'none'; form-action 'self'; "
+            "frame-ancestors 'none'; object-src 'none'"
+        )
+    else:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; "
+            "form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+        )
     if request.url.path.startswith(("/v1", "/demo/api")):
         response.headers["Cache-Control"] = "no-store"
-    if get_settings().is_production:
+    if settings.is_production:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+
+@app.middleware("http")
+async def attach_request_id(request: Request, call_next):
+    started = time.perf_counter()
+    req_id = safe_request_id(request.headers.get("X-Request-ID"), request_id())
+    request.state.request_id = req_id
+    settings = get_settings()
+    content_length = request.headers.get("Content-Length")
+    if request.method in {"POST", "PUT", "PATCH"} and content_length is None:
+        response = _error(request, 411, "length_required", "请求必须提供 Content-Length")
+        _apply_security_headers(response, request, req_id, settings)
+        return response
+    if content_length:
+        try:
+            parsed_length = int(content_length)
+            too_large = parsed_length < 0 or parsed_length > settings.max_request_body_bytes
+        except ValueError:
+            too_large = True
+        if too_large:
+            response = _error(
+                request, 413, "request_too_large",
+                f"请求体不能超过 {settings.max_request_body_bytes} 字节",
+            )
+            _apply_security_headers(response, request, req_id, settings)
+            return response
+    response = await call_next(request)
+    _apply_security_headers(response, request, req_id, settings)
     logger.info(json.dumps({
         "timestamp": time.time(),
         "level": "info",
@@ -144,37 +178,34 @@ def _error(request: Request, status: int, code: str, message: str, details: dict
         "code": code, "message": message, "details": details or {}})
 
 
-class SlidingWindowRateLimiter:
-    def __init__(self) -> None:
-        self._hits: dict[str, deque[float]] = defaultdict(deque)
-        self._lock = Lock()
-
-    def check(self, tenant_id: str, limit: int, now: float | None = None) -> tuple[bool, int, int]:
-        current = time.monotonic() if now is None else now
-        cutoff = current - 60
-        with self._lock:
-            hits = self._hits[tenant_id]
-            while hits and hits[0] <= cutoff:
-                hits.popleft()
-            if len(hits) >= limit:
-                retry_after = max(1, ceil(60 - (current - hits[0])))
-                return False, 0, retry_after
-            hits.append(current)
-            return True, max(0, limit - len(hits)), 0
-
-
 _api_key_header = APIKeyHeader(name="X-API-Key", scheme_name="TenantApiKey", auto_error=False)
 _rate_limiter = SlidingWindowRateLimiter()
+_auth_failure_limiter = SlidingWindowRateLimiter()
 
 
 def auth_context(
+    request: Request,
     response: Response,
     x_api_key: str | None = Security(_api_key_header),
-    x_tenant_id: str = Header(alias="X-Tenant-ID", min_length=1, max_length=128),
+    x_tenant_id: str = Header(
+        alias="X-Tenant-ID", min_length=1, max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    ),
 ) -> str:
     settings = get_settings()
     expected = settings.tenant_api_keys.get(x_tenant_id, settings.api_key if settings.environment == "development" else "")
-    if not x_api_key or not expected or not hmac.compare_digest(x_api_key, expected):
+    authenticated = bool(x_api_key and expected and constant_time_equal(x_api_key, expected))
+    if not authenticated:
+        source = request.client.host if request.client else "unknown"
+        allowed, _, retry_after = _auth_failure_limiter.check(
+            source, settings.auth_failure_rate_limit_per_minute
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="too many authentication failures",
+                headers={"Retry-After": str(retry_after)},
+            )
         raise HTTPException(status_code=401, detail="invalid API key", headers={"WWW-Authenticate": "ApiKey"})
     allowed, remaining, retry_after = _rate_limiter.check(x_tenant_id, settings.rate_limit_per_minute)
     response.headers["X-RateLimit-Limit"] = str(settings.rate_limit_per_minute)
@@ -188,7 +219,10 @@ def auth_context(
     return x_tenant_id
 
 
-def idempotency_key(value: str = Header(alias="Idempotency-Key", min_length=1, max_length=256)) -> str:
+def idempotency_key(value: str = Header(
+    alias="Idempotency-Key", min_length=1, max_length=256,
+    pattern=r"^[A-Za-z0-9._:-]+$",
+)) -> str:
     return value
 
 
@@ -201,22 +235,23 @@ def current_pack(request: Request, db: Session) -> RulePack:
     return pack
 
 
-def _request_hash(body: object) -> str:
+def _request_hash(request: Request, body: object) -> str:
     value = body.model_dump(mode="json") if hasattr(body, "model_dump") else body
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    envelope = {"method": request.method, "path": request.url.path, "body": value}
+    return hashlib.sha256(json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _cached(db: Session, tenant_id: str, key: str, body: object) -> dict | None:
+def _cached(db: Session, tenant_id: str, key: str, request: Request, body: object) -> dict | None:
     record = db.scalar(select(IdempotencyRecord).where(IdempotencyRecord.tenant_id == tenant_id, IdempotencyRecord.idempotency_key == key))
     if not record:
         return None
-    if record.request_hash != _request_hash(body):
-        raise ValueError("同一 Idempotency-Key 不能用于不同请求体")
+    if record.request_hash != _request_hash(request, body):
+        raise ValueError("同一 Idempotency-Key 不能用于不同接口、资源或请求体")
     return record.response_body
 
 
-def _cache(db: Session, tenant_id: str, key: str, body: object, response: dict) -> None:
-    db.add(IdempotencyRecord(tenant_id=tenant_id, idempotency_key=key, request_hash=_request_hash(body), status_code=200, response_body=response))
+def _cache(db: Session, tenant_id: str, key: str, request: Request, body: object, response: dict) -> None:
+    db.add(IdempotencyRecord(tenant_id=tenant_id, idempotency_key=key, request_hash=_request_hash(request, body), status_code=200, response_body=response))
     db.commit()
 
 
@@ -277,11 +312,11 @@ def rules_page() -> HTMLResponse:
 @app.post("/v1/profiles:init", tags=["profiles"])
 def initialize(body: ProfileInitRequest, request: Request, tenant_id: str = Depends(auth_context),
                idem: str = Depends(idempotency_key), db: Session = Depends(get_db)) -> dict:
-    cached = _cached(db, tenant_id, idem, body)
+    cached = _cached(db, tenant_id, idem, request, body)
     if cached: return cached
     pack = current_pack(request, db)
     response = init_profile(db, tenant_id, body, pack, request.state.request_id, idem)
-    _cache(db, tenant_id, idem, body, response)
+    _cache(db, tenant_id, idem, request, body, response)
     return response
 
 
@@ -293,11 +328,11 @@ def read_profile(user_id: str, tenant_id: str = Depends(auth_context), db: Sessi
 @app.post("/v1/profiles/{user_id}/messages:ingest", tags=["messages"])
 def ingest(user_id: str, body: MessageIngestRequest, request: Request, tenant_id: str = Depends(auth_context),
            idem: str = Depends(idempotency_key), db: Session = Depends(get_db)) -> dict:
-    cached = _cached(db, tenant_id, idem, body)
+    cached = _cached(db, tenant_id, idem, request, body)
     if cached: return cached
     pack = current_pack(request, db)
     response = ingest_message(db, tenant_id, user_id, body, pack, request.state.request_id, idem)
-    _cache(db, tenant_id, idem, body, response)
+    _cache(db, tenant_id, idem, request, body, response)
     return response
 
 
@@ -310,10 +345,10 @@ def explain(user_id: str, field: str | None = Query(default=None), tenant_id: st
 @app.post("/v1/profiles/{user_id}:correct", tags=["profiles"])
 def correct(user_id: str, body: CorrectionRequest, request: Request, tenant_id: str = Depends(auth_context),
             idem: str = Depends(idempotency_key), db: Session = Depends(get_db)) -> dict:
-    cached = _cached(db, tenant_id, idem, body)
+    cached = _cached(db, tenant_id, idem, request, body)
     if cached: return cached
     response = correct_profile(db, tenant_id, user_id, body, current_pack(request, db), request.state.request_id, idem)
-    _cache(db, tenant_id, idem, body, response)
+    _cache(db, tenant_id, idem, request, body, response)
     return response
 
 
@@ -326,7 +361,7 @@ def set_enneagram(
     idem: str = Depends(idempotency_key),
     db: Session = Depends(get_db),
 ) -> dict:
-    cached = _cached(db, tenant_id, idem, body)
+    cached = _cached(db, tenant_id, idem, request, body)
     if cached:
         return cached
     response = set_enneagram_profile(
@@ -338,17 +373,17 @@ def set_enneagram(
         request.state.request_id,
         idem,
     )
-    _cache(db, tenant_id, idem, body, response)
+    _cache(db, tenant_id, idem, request, body, response)
     return response
 
 
 @app.post("/v1/profiles/{user_id}:forget", tags=["profiles"])
 def forget(user_id: str, body: ForgetRequest, request: Request, tenant_id: str = Depends(auth_context),
            idem: str = Depends(idempotency_key), db: Session = Depends(get_db)) -> dict:
-    cached = _cached(db, tenant_id, idem, body)
+    cached = _cached(db, tenant_id, idem, request, body)
     if cached: return cached
     response = forget_profile(db, tenant_id, user_id, body, current_pack(request, db), request.state.request_id, idem)
-    _cache(db, tenant_id, idem, body, response)
+    _cache(db, tenant_id, idem, request, body, response)
     return response
 
 
@@ -368,7 +403,7 @@ def reset_profile(
 ) -> dict:
     if not get_settings().profile_reset_active:
         raise HTTPException(status_code=404, detail="画像重置功能未启用")
-    cached = _cached(db, tenant_id, idem, body)
+    cached = _cached(db, tenant_id, idem, request, body)
     if cached:
         return cached
 
@@ -401,7 +436,7 @@ def reset_profile(
         "profile": result["profile"],
         "rule_pack": result["rule_pack"],
     }
-    _cache(db, tenant_id, idem, body, response)
+    _cache(db, tenant_id, idem, request, body, response)
     return response
 
 

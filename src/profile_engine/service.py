@@ -693,11 +693,12 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
     user = find_user(db, tenant_id, tenant_user_id)
     version = current_version(db, user)
     _check_version(version, body.expected_profile_version)
-    if body.target_path.startswith(
-        ("mbti_dimensions", "behavior_style", "language_style", "portrait", "digital_code_profile",
-         "enneagram_profile", "meta")
-    ):
-        raise ValueError("派生字段不可直接更正；请更正底层事实或核心维度")
+    allowed_identity_paths = {
+        "identity.display_name", "identity.birth_date", "identity.birth_time", "identity.timezone",
+    }
+    is_core_trait = body.target_path.startswith("core_traits.") and len(body.target_path.split(".")) == 3
+    if not is_core_trait and body.target_path not in allowed_identity_paths:
+        raise ValueError("只允许更正核心维度或姓名、生日、出生时间、时区等底层身份事实")
     before = clone_profile(version.snapshot)
     profile = clone_profile(version.snapshot)
     parent, key = _resolve_path(profile, body.target_path)
@@ -706,7 +707,7 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
     applied_value = body.value
     evidence_ids = []
     if body.target_path.startswith("core_traits."):
-        if not isinstance(body.value, (float, int)) or not 0 <= body.value <= 1:
+        if isinstance(body.value, bool) or not isinstance(body.value, (float, int)) or not 0 <= body.value <= 1:
             raise ValueError("核心维度更正值必须在0到1之间")
         old_value = old["value"]
         correction_cap = float(
@@ -765,6 +766,10 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
             apply_source_profile(profile, corrected_date.isoformat())
             profile["mbti_dimensions"]["type_label"] = corrected_template.mbti
     elif body.target_path.startswith("identity."):
+        limits = {"display_name": 256, "birth_time": 16, "timezone": 64}
+        if key in limits and (not isinstance(body.value, str) or not body.value.strip()
+                              or len(body.value) > limits[key]):
+            raise ValueError(f"{key} 必须是 1 到 {limits[key]} 个字符的字符串")
         parent[key] = body.value
         if key == "display_name": user.display_name = body.value
         elif key == "birth_time": user.birth_time = body.value

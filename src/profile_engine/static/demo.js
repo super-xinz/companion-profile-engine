@@ -52,7 +52,10 @@ async function api(path, options = {}) {
   if (!response.ok) {
     let message = payload.detail || payload.message || `请求失败（${response.status}）`;
     if (typeof message === "object") message = message.message || JSON.stringify(message);
-    throw new Error(message);
+    const error = new Error(message);
+    error.payload = payload;
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }
@@ -86,7 +89,7 @@ function renderModelOptions(config = {}) {
   appState.modelProvider = selected?.provider || "deepseek";
   const select = $("#modelProviderSelect");
   select.innerHTML = appState.modelOptions.map(item =>
-    `<option value="${esc(item.provider)}" ${item.provider === appState.modelProvider ? "selected" : ""} ${item.available ? "" : "disabled"}>${esc(item.label)}${item.available ? "" : "（未配置）"}</option>`
+    `<option value="${esc(item.provider)}" ${item.provider === appState.modelProvider ? "selected" : ""} ${item.available ? "" : "disabled"}>${esc(item.label)} · ${esc(item.model)}${item.available ? "" : "（未配置）"}</option>`
   ).join("");
   select.title = selected ? `${selected.label} · ${selected.route} · ${selected.model}` : "没有可用模型";
 }
@@ -251,8 +254,19 @@ async function sendMessage() {
     await refreshPeople();
   } catch (error) {
     setTyping(false);
-    appendMessage("system", `本轮处理失败：${error.message}`);
-    toast(error.message);
+    if (error.payload?.code === "model_no_response") {
+      const details = error.payload.details || {};
+      appendMessage("system", error.message);
+      appState.version = details.profile_version || appState.version;
+      appState.lastEngine = details.engine || appState.lastEngine;
+      renderTurn();
+      await reloadProfile();
+      await refreshPeople();
+      toast("模型无返回");
+    } else {
+      appendMessage("system", `本轮处理失败：${error.message}`);
+      toast(error.message);
+    }
   } finally {
     appState.busy = false;
     $("#sendBtn").disabled = false;

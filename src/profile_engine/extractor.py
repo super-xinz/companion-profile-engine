@@ -8,9 +8,9 @@ from typing import Protocol
 import httpx
 
 from .config import get_settings
+from .model_catalog import ModelProvider
 from .model_gateway import (ModelConfigurationError, ModelEndpoint,
-                            ModelProvider, chat_completion,
-                            get_model_endpoint)
+                            chat_completion, get_model_endpoint)
 from .schemas import ReplyGuidance, SemanticAnalysis, SemanticFrame, TraitSignal
 
 

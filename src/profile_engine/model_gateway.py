@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 import httpx
 
 from .config import get_settings
-
-
-ModelProvider = Literal["deepseek", "claude"]
+from .model_catalog import (MODEL_PROVIDERS, MODEL_SPECS_BY_PROVIDER,
+                            ModelProvider)
 
 
 class ModelConfigurationError(RuntimeError):
@@ -40,35 +38,25 @@ def get_model_endpoint(provider: ModelProvider | str | None = None) -> ModelEndp
     if settings.openrouter_app_name:
         openrouter_headers["X-Title"] = settings.openrouter_app_name
 
-    if selected == "deepseek":
-        return ModelEndpoint(
-            provider="deepseek",
-            label="DeepSeek V3.2",
-            route_label="OpenRouter",
-            api_key=settings.openrouter_api_key,
-            base_url=settings.openrouter_base_url.rstrip("/"),
-            model=settings.deepseek_model,
-            timeout=settings.model_timeout_seconds,
-            extra_headers=openrouter_headers,
-        )
-    if selected == "claude":
-        return ModelEndpoint(
-            provider="claude",
-            label="Claude",
-            route_label="OpenRouter",
-            api_key=settings.openrouter_api_key,
-            base_url=settings.openrouter_base_url.rstrip("/"),
-            model=settings.claude_model,
-            timeout=settings.model_timeout_seconds,
-            extra_headers=openrouter_headers,
-        )
-    raise ModelConfigurationError(f"不支持的模型供应商: {selected}")
+    spec = MODEL_SPECS_BY_PROVIDER.get(selected)
+    if spec is None:
+        raise ModelConfigurationError(f"不支持的模型供应商: {selected}")
+    return ModelEndpoint(
+        provider=spec.provider,
+        label=spec.label,
+        route_label="OpenRouter",
+        api_key=settings.openrouter_api_key,
+        base_url=settings.openrouter_base_url.rstrip("/"),
+        model=getattr(settings, spec.setting_name),
+        timeout=settings.model_timeout_seconds,
+        extra_headers=openrouter_headers,
+    )
 
 
 def public_model_options() -> dict:
     settings = get_settings()
     options = []
-    for provider in ("deepseek", "claude"):
+    for provider in MODEL_PROVIDERS:
         endpoint = get_model_endpoint(provider)
         options.append({
             "provider": endpoint.provider,
@@ -98,9 +86,10 @@ def chat_completion(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    if json_response and endpoint.provider == "deepseek":
+    spec = MODEL_SPECS_BY_PROVIDER[endpoint.provider]
+    if json_response and spec.supports_json_object:
         payload["response_format"] = {"type": "json_object"}
-    if endpoint.provider == "deepseek":
+    if spec.disable_reasoning:
         payload["reasoning"] = {"enabled": False}
     response = httpx.post(
         f"{endpoint.base_url}/chat/completions",

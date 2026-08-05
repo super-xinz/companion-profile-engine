@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from profile_engine.api import SlidingWindowRateLimiter, app
 from profile_engine.config import Settings
+from profile_engine.model_catalog import MODEL_PROVIDERS
 
 
 HEADERS = {"X-API-Key": "local-development-key", "X-Tenant-ID": "test-tenant"}
@@ -21,18 +22,52 @@ def test_b2b_capabilities_security_headers_and_api_key_challenge():
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["api_version"] == "v1"
-        assert body["service_version"] == "0.4.2"
+        assert body["service_version"] == "0.6.0"
+        assert [item["provider"] for item in body["model_config"]["options"]] == list(MODEL_PROVIDERS)
         assert body["limits"]["requests_per_minute"] >= 1
         assert response.headers["x-api-version"] == "1"
         assert response.headers["x-ratelimit-limit"]
         assert response.headers["cache-control"] == "no-store"
         assert response.headers["x-content-type-options"] == "nosniff"
+        assert "default-src 'none'" in response.headers["content-security-policy"]
+
+        docs = client.get("/docs")
+        assert docs.status_code == 200
+        assert "https://cdn.jsdelivr.net" in docs.headers["content-security-policy"]
+
+        sanitized = client.get("/health", headers={"X-Request-ID": "bad request id\t"})
+        assert sanitized.status_code == 200
+        assert sanitized.headers["x-request-id"] != "bad request id\t"
 
         unauthorized = client.get("/v1/capabilities", headers={
             "X-API-Key": "wrong", "X-Tenant-ID": "test-tenant",
         })
         assert unauthorized.status_code == 401
         assert unauthorized.headers["www-authenticate"] == "ApiKey"
+
+        unicode_key = client.get("/v1/capabilities", headers={
+            "X-API-Key": b"\xff", "X-Tenant-ID": "test-tenant",
+        })
+        assert unicode_key.status_code == 401
+
+
+def test_request_size_limit_rejects_before_endpoint_processing():
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/profiles:init",
+            headers={**idem("oversized-request"), "Content-Length": "2500001"},
+            content=b"{}",
+        )
+        assert response.status_code == 413
+        assert response.json()["code"] == "request_too_large"
+
+        missing_length = client.build_request(
+            "POST", "/v1/profiles:init", headers=idem("missing-length"), content=b"{}"
+        )
+        missing_length.headers.pop("Content-Length", None)
+        response = client.send(missing_length)
+        assert response.status_code == 411
+        assert response.json()["code"] == "length_required"
 
 
 def test_production_configuration_fails_closed_and_disables_demo_defaults():
@@ -49,7 +84,7 @@ def test_production_configuration_fails_closed_and_disables_demo_defaults():
     production = Settings(
         _env_file=None,
         environment="production",
-        database_url="postgresql://profile:secret@database/profile",
+        database_url="postgresql://profile:secret@database/profile",  # pragma: allowlist secret
         tenant_api_keys={"customer-a": "x" * 32},
         semantic_extractor="deterministic",
     )
@@ -61,7 +96,7 @@ def test_production_configuration_fails_closed_and_disables_demo_defaults():
     missing_model_key = Settings(
         _env_file=None,
         environment="production",
-        database_url="postgresql://profile:secret@database/profile",
+        database_url="postgresql://profile:secret@database/profile",  # pragma: allowlist secret
         tenant_api_keys={"customer-a": "x" * 32},
         semantic_extractor="model",
         allow_external_semantic_processing=True,
@@ -73,14 +108,27 @@ def test_production_configuration_fails_closed_and_disables_demo_defaults():
     configured_model = Settings(
         _env_file=None,
         environment="production",
-        database_url="postgresql://profile:secret@database/profile",
+        database_url="postgresql://profile:secret@database/profile",  # pragma: allowlist secret
         tenant_api_keys={"customer-a": "x" * 32},
         semantic_extractor="model",
         default_model_provider="claude",
         allow_external_semantic_processing=True,
-        openrouter_api_key="sk-or-test",
+        openrouter_api_key="sk-or-test",  # pragma: allowlist secret
     )
     configured_model.validate_runtime_configuration()
+
+    insecure_router = Settings(
+        _env_file=None,
+        environment="production",
+        database_url="postgresql://profile:secret@database/profile",  # pragma: allowlist secret
+        tenant_api_keys={"customer-a": "x" * 32},
+        semantic_extractor="model",
+        allow_external_semantic_processing=True,
+        openrouter_api_key="sk-or-test",  # pragma: allowlist secret
+        openrouter_base_url="http://openrouter.invalid/v1",
+    )
+    with pytest.raises(RuntimeError, match="必须使用 HTTPS"):
+        insecure_router.validate_runtime_configuration()
 
 
 def test_rate_limiter_is_tenant_scoped_and_returns_retry_window():
@@ -169,6 +217,34 @@ def test_dialogue_state_machine_idempotency_and_isolation():
         assert conflict.status_code == 409
 
 
+def test_idempotency_key_is_bound_to_method_path_resource_and_body():
+    user_a = f"idem-a-{uuid.uuid4().hex}"
+    user_b = f"idem-b-{uuid.uuid4().hex}"
+    with TestClient(app) as client:
+        for user in (user_a, user_b):
+            created = client.post("/v1/profiles:init", headers=idem(f"init-{user}"), json={
+                "tenant_user_id": user,
+                "consent": {"profile": True, "sensitive_inference": False},
+            })
+            assert created.status_code == 200, created.text
+        payload = {
+            "conversation_id": "same-conversation",
+            "message_id": "same-message",
+            "expected_profile_version": 1,
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "text": "同一个请求体不能跨人物复用幂等结果。",
+        }
+        shared_key = f"shared-{uuid.uuid4().hex}"
+        first = client.post(
+            f"/v1/profiles/{user_a}/messages:ingest", headers=idem(shared_key), json=payload
+        )
+        assert first.status_code == 200, first.text
+        second = client.post(
+            f"/v1/profiles/{user_b}/messages:ingest", headers=idem(shared_key), json=payload
+        )
+        assert second.status_code == 422
+        assert "不同接口、资源或请求体" in second.json()["message"]
+
 def test_consent_and_forget_birth_inference():
     user = f"forget-{uuid.uuid4().hex}"
     with TestClient(app) as client:
@@ -233,7 +309,15 @@ def test_correction_explanation_and_evidence_reversal():
     field = "core_traits.energy_mode.extroversion"
     with TestClient(app) as client:
         initialized = client.post("/v1/profiles:init", headers=idem(f"init-{user}"), json={
-            "tenant_user_id": user, "consent": {"profile": True, "sensitive_inference": False}}).json()
+            "tenant_user_id": user, "consent": {"profile": True, "sensitive_inference": False}})
+        assert initialized.status_code == 200
+        rejected = client.post(f"/v1/profiles/{user}:correct", headers=idem(f"bad-correct-{user}"), json={
+            "expected_profile_version": 1,
+            "target_path": "runtime.memories",
+            "value": [],
+            "reason": "禁止覆盖内部运行时结构",
+        })
+        assert rejected.status_code == 422
         corrected = client.post(f"/v1/profiles/{user}:correct", headers=idem(f"correct-{user}"), json={
             "expected_profile_version": 1, "target_path": field, "value": 1.0, "reason": "用户明确更正"})
         assert corrected.status_code == 200, corrected.text

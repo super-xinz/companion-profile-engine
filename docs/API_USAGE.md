@@ -32,7 +32,9 @@ sequenceDiagram
 
 画像引擎只摄取用户表达；`assistant_message` 不属于当前摄取 Schema。BFF 可把最近 user/assistant 历史映射到 `context.recent_turns`。`turn_id` 应同时映射为 `message_id` 和 `Idempotency-Key`，防止网络重试导致重复更新。
 
-仓库内 `/demo` 页面就是上述编排的可运行 Demo：其后端 `/demo/api/chat` 先调用画像引擎，再读取更新后的画像和回答策略，最后调用界面所选的 DeepSeek V3.2 或 Claude 生成回复。两个模型均经 OpenRouter，浏览器不会直接持有画像 API Key 或模型 API Key。
+仓库内 `/demo` 页面就是上述编排的可运行 Demo：其后端 `/demo/api/chat` 先调用画像引擎，再读取更新后的画像和回答策略，最后调用界面所选的 DeepSeek、Claude、GPT、GLM、Gemini 或 Kimi 生成回复。所有模型均经 OpenRouter，浏览器不会直接持有画像 API Key 或模型 API Key。
+
+模型网络请求失败或 OpenRouter 返回 4xx/5xx 时，`/demo/api/chat` 返回 `502` 和 `code=model_no_response`，并在 `details` 中提供具体模型 ID、上游 HTTP 状态及画像版本。系统不会生成、展示或保存兜底助手回复。
 
 ## 2. 启动
 
@@ -70,7 +72,7 @@ Linux/macOS：
 PROFILE_API_KEY=local-development-key PROFILE_TENANT_ID=test-tenant ./scripts/smoke-test.sh http://127.0.0.1:8000
 ```
 
-成功标准是脚本退出码为 0、数据库状态为 `ok`。`PROFILE_SEMANTIC_EXTRACTOR=model` 时，必须配置 `PROFILE_OPENROUTER_API_KEY`、模型名和外部语义处理授权；消息请求可用 `model_provider=deepseek|claude` 选择模型。`deterministic` 只用于无外部模型的回归和降级。
+成功标准是脚本退出码为 0、数据库状态为 `ok`。`PROFILE_SEMANTIC_EXTRACTOR=model` 时，必须配置 `PROFILE_OPENROUTER_API_KEY`、模型名和外部语义处理授权；消息请求可用 `model_provider=deepseek|claude|gpt|glm|gemini|kimi` 选择模型。`deterministic` 只用于无外部模型的回归和降级。
 
 ## 3. 鉴权与公共 Header
 
@@ -148,7 +150,7 @@ curl "$BASE_URL/v1/profiles/demo-xu" -H "X-API-Key: $API_KEY" -H "X-Tenant-ID: $
 }
 ```
 
-成功响应包括：新 `profile_version`、`semantic_frames`、候选/接受/拒绝特征信号、`profile_patch`、`runtime_operations`、`reply_hints`、`strategy_trace` 和 `no_profile_change`。版本冲突返回 409；同一幂等键与相同请求返回缓存结果。
+成功响应包括：新 `profile_version`、`semantic_frames`、候选/接受/拒绝特征信号、`profile_patch`、`runtime_operations`、`reply_hints`、`strategy_trace` 和 `no_profile_change`。版本冲突返回 409；同一幂等键仅在 HTTP 方法、接口路径、资源 ID 和请求体全部相同时返回缓存结果，禁止跨人物或跨接口复用。
 
 ### 解释画像
 
@@ -318,8 +320,11 @@ llm_context = {
 | 403 | `consent_required` | 未授权画像或敏感推断 | 需用户授权，不自动重试 |
 | 404 | `not_found` | 用户/画像不存在 | 可先初始化 |
 | 409 | `profile_version_conflict` | 并发导致版本过期 | 重新读取后最多重试一次 |
+| 411 | `length_required` | 写请求未提供 `Content-Length` | 补齐请求长度后重试 |
+| 413 | `request_too_large` | 请求体超过服务器配置上限 | 缩小请求体 |
 | 429 | `tenant rate limit exceeded` | 租户超过每分钟调用限制 | 按 `Retry-After` 等待 |
-| 422 | FastAPI 校验或 `invalid_operation` | 缺 Header、字段非法、复用幂等键到不同 body | 修正请求，不盲重试 |
+| 422 | FastAPI 校验或 `invalid_operation` | 缺 Header、字段非法、跨接口/资源/请求体复用幂等键 | 修正请求，不盲重试 |
+| 502 | `model_no_response`（网站聊天） | OpenRouter 网络、区域限制或模型无有效返回 | 展示真实错误；不会生成兜底回复 |
 | 503 | `semantic_extractor_unavailable` | 外部语义提取不可用 | 有限退避重试 |
 
 常见问题：画像为空通常是未初始化或用户/租户不一致；画像未更新可能是 `no_profile_change=true`、版本冲突或未获得相应授权。限制注入长度应在 BFF 做字段白名单和字符上限，HIWM 默认 `PROFILE_CONTEXT_MAX_CHARS=8000`。

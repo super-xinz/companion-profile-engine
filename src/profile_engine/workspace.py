@@ -5,10 +5,9 @@ import json
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Literal
-from urllib.parse import unquote
 
 import yaml
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
@@ -21,7 +20,7 @@ from .models import (AuditLog, ChatMessage, Conversation, ManualOverride, Memory
                      TeamMember, User)
 from .model_gateway import public_model_options
 from .profile import TRAIT_NAMES, clone_profile, flattened_traits, rebuild_derived, recalculate_meta
-from .rule_compiler import validate_rule_references
+from .rule_compiler import UniqueKeyLoader, validate_rule_references
 from .schemas import (Consent, EnneagramIdentityInput, ProfileInitRequest,
                       SetEnneagramRequest)
 from .service import (_audit, _resolve_path, current_version, explain_profile, find_user,
@@ -38,6 +37,40 @@ ROLE_PERMISSIONS = {
     "expert": ["profile.edit", "rules.edit"],
     "viewer": [],
 }
+
+
+def _validate_json_tree(value: Any, *, max_depth: int = 64, max_nodes: int = 100_000) -> None:
+    nodes = 0
+    active: set[int] = set()
+
+    def visit(item: Any, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > max_nodes:
+            raise ValueError("规则文档节点过多")
+        if depth > max_depth:
+            raise ValueError("规则文档嵌套层级过深")
+        if item is None or isinstance(item, (bool, int, float, str)):
+            return
+        if not isinstance(item, (dict, list)):
+            raise ValueError(f"规则文档包含不支持的类型：{type(item).__name__}")
+        marker = id(item)
+        if marker in active:
+            raise ValueError("规则文档不能包含循环引用或 YAML 别名递归")
+        active.add(marker)
+        try:
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    if not isinstance(key, str) or not key or len(key) > 256:
+                        raise ValueError("规则字段名必须是 1 到 256 个字符的字符串")
+                    visit(child, depth + 1)
+            else:
+                for child in item:
+                    visit(child, depth + 1)
+        finally:
+            active.remove(marker)
+
+    visit(value, 0)
 
 
 class PersonCreate(BaseModel):
@@ -100,8 +133,10 @@ class TeamMemberRequest(BaseModel):
     role: Literal["admin", "reviewer", "expert", "viewer"]
 
 
-def _actor(value: str | None) -> str:
-    return unquote(value or "系统管理员").strip()[:128]
+def _actor(_value: str | None) -> str:
+    # The shared Demo password authenticates the single workspace administrator.
+    # A caller-controlled display-name header must never become an identity credential.
+    return "系统管理员"
 
 
 def _ensure_member(db: Session, tenant_id: str, actor: str) -> TeamMember:
@@ -255,7 +290,7 @@ def workspace_bootstrap(request: Request, tenant_id: str = Depends(demo_auth),
 
 
 @router.get("/people")
-def list_people(q: str | None = None, tenant_id: str = Depends(demo_auth),
+def list_people(q: str | None = Query(default=None, max_length=128), tenant_id: str = Depends(demo_auth),
                 db: Session = Depends(get_db)) -> dict:
     query = select(User).where(
         User.tenant_id == tenant_id,
@@ -279,7 +314,7 @@ def create_person(body: PersonCreate, request: Request, tenant_id: str = Depends
         db, tenant_id,
         ProfileInitRequest(tenant_user_id=user_id, display_name=body.display_name, birth_date=body.birth_date,
                            timezone="Asia/Shanghai", enneagram=body.enneagram,
-                           consent=Consent(profile=True, sensitive_inference=bool(body.birth_date or body.enneagram))),
+                           consent=Consent(profile=True, sensitive_inference=True)),
         _current_pack(request, db), request.state.request_id, f"workspace-create-{user_id}",
     )
     user = find_user(db, tenant_id, user_id)
@@ -383,17 +418,18 @@ def manual_edit(user_id: str, body: ManualEditRequest, request: Request,
     version = current_version(db, user)
     if version.version_no != body.expected_profile_version:
         raise HTTPException(status_code=409, detail=f"画像已更新为 v{version.version_no}，请刷新后重试")
-    if body.target_path.startswith(
-        ("mbti_dimensions", "behavior_style", "language_style", "portrait", "digital_code_profile",
-         "enneagram_profile", "meta")
-    ):
-        raise HTTPException(status_code=422, detail="派生字段不能直接修改，请编辑底层画像维度或事实")
+    is_core_trait = body.target_path.startswith("core_traits.") and len(body.target_path.split(".")) == 3
+    if not is_core_trait and body.target_path != "identity.display_name":
+        raise HTTPException(status_code=422, detail="只允许维护核心维度或人物姓名")
     before = clone_profile(version.snapshot)
     profile = clone_profile(version.snapshot)
-    parent, key = _resolve_path(profile, body.target_path)
+    try:
+        parent, key = _resolve_path(profile, body.target_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     old = clone_profile(parent[key]) if isinstance(parent[key], dict) else parent[key]
     if body.target_path.startswith("core_traits."):
-        if not isinstance(body.value, (int, float)) or not 0 <= float(body.value) <= 1:
+        if isinstance(body.value, bool) or not isinstance(body.value, (int, float)) or not 0 <= float(body.value) <= 1:
             raise HTTPException(status_code=422, detail="画像维度必须在 0 到 1 之间")
         entry = parent[key]
         before_value = entry["value"]
@@ -413,12 +449,14 @@ def manual_edit(user_id: str, body: ManualEditRequest, request: Request,
         rebuild_derived(profile, _current_pack(request, db).canonical_json["schema"])
         evidence_refs = [evidence.id]
     else:
+        if not isinstance(body.value, str) or not body.value.strip() or len(body.value) > 256:
+            raise HTTPException(status_code=422, detail="人物姓名必须是 1 到 256 个字符的字符串")
         before_value = old
-        parent[key] = body.value
-        applied = body.value
+        applied = body.value.strip()
+        parent[key] = applied
         evidence_refs = []
         if body.target_path == "identity.display_name":
-            user.display_name = str(body.value)
+            user.display_name = applied
         recalculate_meta(profile)
     locked = db.scalar(select(ManualOverride).where(
         ManualOverride.user_id == user.id, ManualOverride.target_path == body.target_path
@@ -477,7 +515,7 @@ def edit_enneagram(
     return {**response, "actor": actor}
 
 
-def _validate_rules(canonical: dict) -> dict:
+def _validate_rules_unchecked(canonical: dict) -> dict:
     errors: list[str] = []
     warnings: list[str] = []
     schema = canonical.get("schema", {})
@@ -547,6 +585,18 @@ def _validate_rules(canonical: dict) -> dict:
             "enneagram_scene_count": len(scenes),
         },
     }
+
+
+def _validate_rules(canonical: dict) -> dict:
+    try:
+        return _validate_rules_unchecked(canonical)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        return {
+            "valid": False,
+            "errors": [f"规则文档结构或字段类型不正确：{type(exc).__name__}"],
+            "warnings": [],
+            "checks": {},
+        }
 
 
 def _next_revision_no(db: Session, tenant_id: str) -> int:
@@ -647,18 +697,30 @@ def parse_rule_document(body: RuleDocumentParse, tenant_id: str = Depends(demo_a
     actor = _actor(x_actor_name)
     _require(db, tenant_id, actor, "rules.edit")
     try:
-        content = yaml.safe_load(body.document_text)
+        loader = UniqueKeyLoader(body.document_text)
+        try:
+            content = loader.get_single_data()
+        finally:
+            loader.dispose()
     except yaml.YAMLError as exc:
         mark = getattr(exc, "problem_mark", None)
         location = f"第 {mark.line + 1} 行、第 {mark.column + 1} 列" if mark else "文档中"
         raise HTTPException(status_code=422, detail=f"{location}存在格式问题，请检查缩进和标点") from exc
     if not isinstance(content, dict):
         raise HTTPException(status_code=422, detail="完整规则文档最外层必须是一个章节结构")
+    try:
+        _validate_json_tree(content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"asset": body.asset, "content": content}
 
 
 @router.post("/rules/documents/dump")
 def dump_rule_document(body: RuleDocumentDump, tenant_id: str = Depends(demo_auth)) -> dict:
+    try:
+        _validate_json_tree(body.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "asset": body.asset,
         "document_text": yaml.safe_dump(
@@ -698,6 +760,10 @@ def save_draft(revision_id: str, body: DraftSave, tenant_id: str = Depends(demo_
         raise HTTPException(status_code=404, detail="规则草稿不存在")
     if item.status != "draft":
         raise HTTPException(status_code=409, detail="只有草稿可以编辑")
+    try:
+        _validate_json_tree(body.canonical_json)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     item.canonical_json = body.canonical_json
     item.change_summary = body.change_summary
     item.validation_report = _validate_rules(body.canonical_json)

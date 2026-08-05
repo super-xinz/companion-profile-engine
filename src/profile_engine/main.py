@@ -7,7 +7,8 @@ from .config import get_settings
 
 def run() -> None:
     port = int(os.getenv("PORT", str(get_settings().port)))
-    uvicorn.run("profile_engine.api:app", host="0.0.0.0", port=port, reload=False)
+    # Container services must listen on every interface; authentication remains at the API layer.
+    uvicorn.run("profile_engine.api:app", host="0.0.0.0", port=port, reload=False)  # nosec B104
 
 
 if __name__ == "__main__":

@@ -6,6 +6,16 @@ from pathlib import Path
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .model_catalog import MODEL_PROVIDERS
+
+
+LEGACY_MODEL_ALIASES = {
+    "~anthropic/claude-sonnet-latest": "anthropic/claude-sonnet-5",
+    "~openai/gpt-latest": "openai/gpt-5.6-sol",
+    "~google/gemini-pro-latest": "google/gemini-3.1-pro-preview",
+    "~moonshotai/kimi-latest": "moonshotai/kimi-k3",
+}
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PROFILE_", env_file=".env", extra="ignore")
@@ -22,7 +32,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     deepseek_model: str = "deepseek/deepseek-v3.2"
-    claude_model: str = "~anthropic/claude-sonnet-latest"
+    claude_model: str = "anthropic/claude-sonnet-5"
+    gpt_model: str = "openai/gpt-5.6-sol"
+    glm_model: str = "z-ai/glm-5.2"
+    gemini_model: str = "google/gemini-3.1-pro-preview"
+    kimi_model: str = "moonshotai/kimi-k3"
     openrouter_site_url: str | None = None
     openrouter_app_name: str = "Companion Profile Engine"
     model_timeout_seconds: float = 30.0
@@ -33,6 +47,10 @@ class Settings(BaseSettings):
     api_docs_enabled: bool | None = None
     allow_profile_reset: bool | None = None
     rate_limit_per_minute: int = Field(default=120, ge=1, le=10_000)
+    demo_rate_limit_per_minute: int = Field(default=120, ge=1, le=10_000)
+    demo_model_rate_limit_per_minute: int = Field(default=30, ge=1, le=1_000)
+    auth_failure_rate_limit_per_minute: int = Field(default=30, ge=1, le=1_000)
+    max_request_body_bytes: int = Field(default=2_500_000, ge=1_024, le=20_000_000)
     port: int = 8000
 
     @field_validator("database_url")
@@ -48,6 +66,12 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_mode(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator("claude_model", "gpt_model", "gemini_model", "kimi_model")
+    @classmethod
+    def use_explicit_model_id(cls, value: str) -> str:
+        normalized = value.strip()
+        return LEGACY_MODEL_ALIASES.get(normalized, normalized)
 
     @property
     def is_production(self) -> bool:
@@ -75,8 +99,10 @@ class Settings(BaseSettings):
         errors: list[str] = []
         if self.environment not in {"development", "test", "production"}:
             errors.append("PROFILE_ENVIRONMENT 必须是 development、test 或 production")
-        if self.default_model_provider not in {"deepseek", "claude"}:
-            errors.append("PROFILE_DEFAULT_MODEL_PROVIDER 必须是 deepseek 或 claude")
+        if self.default_model_provider not in MODEL_PROVIDERS:
+            errors.append(
+                "PROFILE_DEFAULT_MODEL_PROVIDER 必须是 " + "、".join(MODEL_PROVIDERS)
+            )
         if self.semantic_extractor not in {"deterministic", "model"}:
             errors.append("PROFILE_SEMANTIC_EXTRACTOR 必须是 deterministic 或 model")
         if self.semantic_extractor == "model":
@@ -84,6 +110,8 @@ class Settings(BaseSettings):
                 errors.append("启用 model 时必须配置 PROFILE_OPENROUTER_API_KEY")
             if not self.allow_external_semantic_processing:
                 errors.append("启用 model 时必须明确设置 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true")
+        if self.is_production and not self.openrouter_base_url.startswith("https://"):
+            errors.append("生产环境 PROFILE_OPENROUTER_BASE_URL 必须使用 HTTPS")
         if self.is_production:
             if not self.database_url.startswith("postgresql+psycopg://"):
                 errors.append("生产环境必须使用 PostgreSQL，禁止使用容器内 SQLite")
