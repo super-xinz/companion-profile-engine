@@ -1,4 +1,4 @@
-rule_system_version: "1.0.0"
+rule_system_version: "1.1.0"
 document_type: "enneagram_interaction_parameter_model"
 target_schema: "01_profile_schema.yaml@2.2.0"
 language: "zh-CN"
@@ -438,6 +438,17 @@ scene_adaptation:
     priorities: ["把任务转成可选择体验", "设置最小行动", "反馈身体真实感受"]
     avoid: ["羞耻激励", "命令式要求", "忽视医疗边界"]
 
+output_adapters:
+  prompt:
+    inject: ["turn_plan", "scene_adaptation", "profile_parameter_input"]
+    forbidden_disclosure: ["九型编号", "画像参数", "内部权重", "置信度", "规则名称"]
+  robot:
+    safety_gate_required: true
+    directives_are_advisory: true
+    allowed_channels: ["voice", "expression", "posture"]
+    device_actions_default: []
+    device_action_policy: "规则模型只给表达建议，不直接执行设备动作；设备能力必须经过独立安全检查和授权。"
+
 maintenance:
   identity_policy:
     default_status: "unassigned"
@@ -450,7 +461,7 @@ maintenance:
     replacement: "新确认结果生成新画像版本并保留审计，不增量平均类型编号"
     forgetting: "支持单独清除九型身份及其派生互动策略"
   strategy_policy:
-    recompute_on: ["九型身份变更", "场景变更", "当前状态变更", "规则包发布"]
+    recompute_on: ["首次画像建立", "画像特质重算", "九型身份变更", "场景变更", "当前状态变更", "规则包发布"]
     never_persist_as_fact:
       - "场景策略"
       - "本轮语言风格"

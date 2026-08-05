@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .digital_code import (aggregate_trait_priors, build_digital_code_profile,
                            empty_digital_code_profile)
-from .enneagram import (build_enneagram_profile, empty_enneagram_profile,
+from .enneagram import (build_enneagram_profile, build_portrait_parameter_input, empty_enneagram_profile,
                          resolve_interaction_strategy)
 from .extractor import SemanticExtractor, get_semantic_extractor
 from .models import (AuditLog, CurrentState, ManualOverride, Memory, ProfileEvidence,
@@ -481,11 +481,13 @@ def _reply_hints(profile: dict, interaction_strategy: dict | None = None) -> tup
     if interaction_strategy:
         strategy_hints = interaction_strategy.get("hints", {})
         hints.update(strategy_hints)
-        locked_fields.update(strategy_hints)
-        hints["enneagram_strategy"] = {
-            key: value for key, value in interaction_strategy.items()
-            if key not in {"hints", "precedence"}
-        }
+        hints["profile_parameter_input"] = interaction_strategy.get("profile_parameter_input", {})
+        if interaction_strategy.get("identity_status") == "confirmed":
+            hints["enneagram_strategy"] = {
+                key: value for key, value in interaction_strategy.items()
+                if key not in {"hints", "precedence", "profile_parameter_input", "behavior_directives"}
+            }
+        hints["turn_plan"] = interaction_strategy.get("turn_plan", {})
         hints["strategy_precedence"] = interaction_strategy.get("precedence", [])
     if prefs.get("response_length") == "short":
         hints.update(max_sentences=3, answer_first=True)
@@ -514,11 +516,12 @@ def _reply_hints(profile: dict, interaction_strategy: dict | None = None) -> tup
 
 def _merge_reply_guidance(profile_hints: dict, guidance: ReplyGuidance, locked_fields: set[str]) -> dict:
     merged = dict(profile_hints)
+    strategy_avoid = profile_hints.get("turn_plan", {}).get("avoid", [])
     merged.update(
         intent=guidance.intent,
         tone=guidance.tone,
         focus=guidance.focus,
-        avoid=guidance.avoid,
+        avoid=list(dict.fromkeys([*guidance.avoid, *strategy_avoid])),
         requires_fresh_information=guidance.requires_fresh_information,
     )
     merged["empathy_first"] = bool(profile_hints.get("empathy_first") or guidance.empathy_first)
@@ -530,7 +533,10 @@ def _merge_reply_guidance(profile_hints: dict, guidance: ReplyGuidance, locked_f
         merged["structure_level"] = guidance.structure_level
     for field in {"empathy_first", "answer_first", "max_sentences"} & locked_fields:
         merged[field] = profile_hints[field]
-    merged["strategy_sources"] = ["current_message_model_guidance", "current_profile", "runtime_state_and_preferences"]
+    merged["strategy_sources"] = [
+        "current_message_model_guidance", "current_profile", "runtime_state_and_preferences",
+        "enneagram_document_runtime",
+    ]
     merged["rule_locked_fields"] = sorted(locked_fields)
     return merged
 
@@ -623,6 +629,9 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
         profile,
         pack.canonical_json.get("enneagram", {}),
         body.context.topic,
+        current_message=body.text,
+        semantic_frames=[frame.model_dump() for frame in frames],
+        reply_guidance=analysis.reply_guidance.model_dump(),
     )
     profile_hints, locked_fields = _reply_hints(profile, interaction_strategy)
     reply_hints = _merge_reply_guidance(profile_hints, analysis.reply_guidance, locked_fields)
@@ -632,11 +641,13 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
             "accepted_trait_signals": accepted_trait_signals, "rejected_trait_signals": rejected_trait_signals,
             "profile_patch": patches, "runtime_operations": runtime_operations, "derived_patch": derived,
             "model_reply_guidance": analysis.reply_guidance.model_dump(), "reply_hints": reply_hints,
+            "behavior_directives": interaction_strategy.get("behavior_directives", {}),
             "strategy_trace": {"semantic_analysis": extractor.version, "profile_version_used": new_no,
                                "candidate_signals": len(analysis.trait_signals),
                                "accepted_signals": len(accepted_trait_signals),
                                "enneagram_identity": profile.get("enneagram_profile", {}).get("identity", {}).get("code"),
                                "scene": interaction_strategy.get("scene") if interaction_strategy else None,
+                               "strategy_sources": interaction_strategy.get("strategy_sources", []),
                                "consumed_by_chatbot": False},
             "no_profile_change": not changed}
 
@@ -841,6 +852,7 @@ def set_enneagram_profile(
         body.enneagram.model_dump(),
         pack.canonical_json["enneagram"],
     )
+    profile["enneagram_profile"]["parameter_input"] = build_portrait_parameter_input(profile)
     profile["enneagram_profile"]["provenance"].append(evidence.id)
     new_no = version.version_no + 1
     profile["meta"]["profile_version"] = new_no
@@ -924,6 +936,7 @@ def forget_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Forge
             item.invalidated_at = datetime.now(timezone.utc)
             affected.append(item.id)
         profile["enneagram_profile"] = empty_enneagram_profile()
+        profile["enneagram_profile"]["parameter_input"] = build_portrait_parameter_input(profile)
     else:
         user.inference_enabled = False
         for item in db.scalars(select(ProfileEvidence).where(ProfileEvidence.user_id == user.id, ProfileEvidence.invalidated.is_(False))):

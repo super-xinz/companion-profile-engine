@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .digital_code import calculate_digital_code, empty_digital_code_profile
-from .enneagram import build_enneagram_profile
+from .enneagram import build_enneagram_profile, build_portrait_parameter_input
 from .rule_compiler import scenario_keys, trait_keys
 from .template_people import TEMPLATE_BY_BIRTH_DATE, template_person_for_birth_date
 
@@ -241,6 +241,7 @@ def build_initial_profile(
     profile["behavior_style"] = derive_behavior(profile, schema)
     profile["language_style"] = derive_language(profile, schema)
     profile["portrait"] = derive_portrait(profile)
+    profile["enneagram_profile"]["parameter_input"] = build_portrait_parameter_input(profile)
     profile["table_view"] = build_profile_table_view(profile)
     recalculate_meta(profile)
     return profile, warnings
@@ -257,6 +258,7 @@ def rebuild_derived(profile: dict, schema: dict) -> list[str]:
     profile["behavior_style"] = derive_behavior(profile, schema)
     profile["language_style"] = derive_language(profile, schema)
     profile["portrait"] = derive_portrait(profile)
+    profile.setdefault("enneagram_profile", {})["parameter_input"] = build_portrait_parameter_input(profile)
     profile["table_view"] = build_profile_table_view(profile)
     recalculate_meta(profile)
     return ["mbti_dimensions", "behavior_style", "language_style", "portrait", "table_view"]

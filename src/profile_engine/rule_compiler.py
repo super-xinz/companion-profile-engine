@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,23 @@ RULE_FILES = (
     "03_dialogue_profile_maintenance.yaml",
     "04_enneagram_interaction_model.yaml",
 )
+
+ENNEAGRAM_DOCUMENT_COUNT = 8
+INSTINCT_SUBTYPE_FIELDS = {
+    "Attention Adjustment": "attention_adjustment",
+    "Resource Focus": "resource_focus",
+    "Relationship Adjustment": "relationship_adjustment",
+    "Social Strategy": "social_strategy",
+    "Blind Spot": "blind_spot",
+    "Interaction Adjustment": "interaction_adjustment",
+}
+WING_FIELDS = {
+    "Expression Adjustment": "expression",
+    "Attention Adjustment": "attention",
+    "Decision Adjustment": "decision",
+    "Relationship Adjustment": "relationship",
+    "Interaction Adjustment": "interaction",
+}
 
 
 class RuleValidationError(ValueError):
@@ -55,6 +73,92 @@ def _load_yaml(path: Path) -> dict:
     if not isinstance(value, dict):
         raise RuleValidationError([f"{path.name}: 顶层必须是对象"])
     return value
+
+
+def _clean_markdown_block(value: str) -> list[str]:
+    items: list[str] = []
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line or line == "---" or line.startswith("```"):
+            continue
+        line = re.sub(r"^[>\-*+\s]+", "", line).strip()
+        if not line or re.match(r"^(instinct_stack|core_type):", line):
+            continue
+        if line not in items:
+            items.append(line)
+    return items
+
+
+def _parse_instinct_subtypes(document: str) -> dict[str, dict[str, Any]]:
+    """Compile the 54 doc-05 subtype assets; raw prose never enters every prompt."""
+    subtype_heading = re.compile(r"^# (SP/SX|SP/SO|SX/SP|SX/SO|SO/SP|SO/SX)｜([1-9])号\s*$", re.M)
+    matches = list(subtype_heading.finditer(document))
+    result: dict[str, dict[str, Any]] = {}
+    for match in matches:
+        next_heading = re.search(r"^# (?!#).+$", document[match.end():], re.M)
+        end = match.end() + next_heading.start() if next_heading else len(document)
+        block = document[match.end():end]
+        sections = list(re.finditer(r"^## (.+?)\s*$", block, re.M))
+        if not sections:
+            continue
+        entry: dict[str, Any] = {
+            "instinct_stack": match.group(1),
+            "core_type": int(match.group(2)),
+            "name": sections[0].group(1).replace("\\", ""),
+        }
+        for index, section in enumerate(sections[1:], start=1):
+            field = INSTINCT_SUBTYPE_FIELDS.get(section.group(1).replace("\\", ""))
+            if not field:
+                continue
+            section_end = sections[index + 1].start() if index + 1 < len(sections) else len(block)
+            entry[field] = _clean_markdown_block(block[section.end():section_end])
+        result[f"{match.group(1)}|{match.group(2)}"] = entry
+    return result
+
+
+def _parse_wing_assets(document: str) -> dict[str, dict[str, Any]]:
+    heading = re.compile(r"^# \d+\\\.\d+ ([1-9]w[1-9])｜(.+?)\s*$", re.M)
+    result: dict[str, dict[str, Any]] = {}
+    for match in heading.finditer(document):
+        next_heading = re.search(r"^# (?!#).+$", document[match.end():], re.M)
+        end = match.end() + next_heading.start() if next_heading else len(document)
+        block = document[match.end():end]
+        sections = list(re.finditer(r"^## (.+?)\s*$", block, re.M))
+        entry: dict[str, Any] = {"name": match.group(2).replace("\\", "")}
+        for index, section in enumerate(sections):
+            field = WING_FIELDS.get(section.group(1).replace("\\", ""))
+            if not field:
+                continue
+            section_end = sections[index + 1].start() if index + 1 < len(sections) else len(block)
+            entry[field] = _clean_markdown_block(block[section.end():section_end])
+        result[match.group(1)] = entry
+    return result
+
+
+def _load_enneagram_documents(
+    source_dir: Path,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    document_dir = source_dir.parent / "飞书文档"
+    manifest: dict[str, dict[str, Any]] = {}
+    contents: dict[int, str] = {}
+    for number in range(1, ENNEAGRAM_DOCUMENT_COUNT + 1):
+        matches = sorted(document_dir.glob(f"文档{number:02d}｜*.md"))
+        if len(matches) != 1:
+            raise RuleValidationError([f"九型技术文档 {number:02d} 应唯一存在，实际找到 {len(matches)} 份"])
+        path = matches[0]
+        content = path.read_text(encoding="utf-8")
+        contents[number] = content
+        manifest[f"document_{number:02d}"] = {
+            "filename": path.name,
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        }
+    core_types = set(re.findall(r"^# Type ([1-9])｜", contents[3], re.M))
+    wing_assets = _parse_wing_assets(contents[4])
+    instinct_subtypes = _parse_instinct_subtypes(contents[5])
+    manifest["document_03"]["asset_count"] = len(core_types)
+    manifest["document_04"]["asset_count"] = len(wing_assets)
+    manifest["document_05"]["asset_count"] = len(instinct_subtypes)
+    return manifest, wing_assets, instinct_subtypes
 
 
 def trait_keys(schema: dict) -> list[str]:
@@ -175,6 +279,10 @@ def compile_rule_pack(source_dir: Path) -> CompiledRulePack:
         raise RuleValidationError([f"缺少规则文件: {name}" for name in missing])
 
     schema, cold, dialogue, enneagram = (_load_yaml(source_dir / name) for name in RULE_FILES)
+    document_manifest, wing_document_assets, instinct_subtypes = _load_enneagram_documents(source_dir)
+    enneagram["source_document_manifest"] = document_manifest
+    enneagram["wing_document_assets"] = wing_document_assets
+    enneagram["instinct_subtypes"] = instinct_subtypes
     errors: list[str] = []
     traits = trait_keys(schema)
     scenarios = scenario_keys(schema)
@@ -212,12 +320,20 @@ def compile_rule_pack(source_dir: Path) -> CompiledRulePack:
     instinct_stacks = enneagram.get("instinct_stacks", {})
     if set(core_types) != {str(value) for value in range(1, 10)}:
         errors.append("九型主型参数必须完整覆盖 1-9")
+    if document_manifest["document_03"].get("asset_count") != 9:
+        errors.append("文档03必须完整包含9种主型资产")
     expected_wings = {
         "1w9", "1w2", "2w1", "2w3", "3w2", "3w4", "4w3", "4w5", "5w4",
         "5w6", "6w5", "6w7", "7w6", "7w8", "8w7", "8w9", "9w8", "9w1",
     }
     if set(wings) != expected_wings:
         errors.append(f"九型侧翼参数覆盖不完整，缺少: {sorted(expected_wings - set(wings))}")
+    if set(wing_document_assets) != expected_wings:
+        errors.append(f"文档04的18侧翼资产覆盖不完整，缺少: {sorted(expected_wings - set(wing_document_assets))}")
+    for wing_id, asset in wing_document_assets.items():
+        missing_fields = sorted(set(WING_FIELDS.values()) - set(asset))
+        if missing_fields:
+            errors.append(f"文档04条目 {wing_id} 缺少字段: {missing_fields}")
     expected_stacks = {"SP/SX", "SP/SO", "SX/SP", "SX/SO", "SO/SP", "SO/SX"}
     if set(instinct_stacks) != expected_stacks:
         errors.append(f"本能叠层覆盖不完整，缺少: {sorted(expected_stacks - set(instinct_stacks))}")
@@ -234,9 +350,20 @@ def compile_rule_pack(source_dir: Path) -> CompiledRulePack:
     accepted_sources = enneagram.get("identity_schema", {}).get("accepted_sources", {})
     if set(accepted_sources) != {"user_supplied", "external_assessment", "expert_confirmed"}:
         errors.append("九型身份来源必须覆盖用户声明、外部测评和专家确认")
-    resolved_combination_count = len(core_types) * len(instinct_stacks)
+    resolved_combination_count = len(instinct_subtypes)
     if resolved_combination_count != 54:
-        errors.append(f"九型主型×本能叠层应解析为54种组合，实际为{resolved_combination_count}")
+        errors.append(f"文档05的主型×本能叠层应解析为54种组合，实际为{resolved_combination_count}")
+    expected_subtypes = {
+        f"{stack}|{core_type}"
+        for stack in expected_stacks
+        for core_type in range(1, 10)
+    }
+    if set(instinct_subtypes) != expected_subtypes:
+        errors.append(f"文档05的54组资产覆盖不完整，缺少: {sorted(expected_subtypes - set(instinct_subtypes))}")
+    for subtype_id, subtype in instinct_subtypes.items():
+        missing_fields = sorted(set(INSTINCT_SUBTYPE_FIELDS.values()) - set(subtype))
+        if missing_fields:
+            errors.append(f"文档05条目 {subtype_id} 缺少字段: {missing_fields}")
 
     for signal_id, signal in cold.get("semantic_signal_extraction", {}).get("generalized_signal_dictionary", {}).items():
         for target, direction in signal.get("effects", {}).items():
@@ -319,8 +446,11 @@ def compile_rule_pack(source_dir: Path) -> CompiledRulePack:
         "golden_case_count": len(golden_cases),
         "enneagram_core_type_count": len(core_types),
         "enneagram_wing_count": len(wings),
+        "enneagram_wing_document_asset_count": len(wing_document_assets),
         "enneagram_instinct_stack_count": len(instinct_stacks),
         "enneagram_resolved_combination_count": resolved_combination_count,
+        "enneagram_source_document_count": len(document_manifest),
+        "enneagram_instinct_subtype_count": len(instinct_subtypes),
         "enneagram_scene_count": len(enneagram.get("scene_adaptation", {})),
         "source_rule_bank": rule_bank_meta,
         "warnings": [cold.get("status"), dialogue.get("status"), enneagram.get("status")],
