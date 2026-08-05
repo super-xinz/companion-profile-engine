@@ -86,7 +86,7 @@ function renderModelOptions(config = {}) {
   appState.modelProvider = selected?.provider || "deepseek";
   const select = $("#modelProviderSelect");
   select.innerHTML = appState.modelOptions.map(item =>
-    `<option value="${esc(item.provider)}" ${item.provider === appState.modelProvider ? "selected" : ""} ${item.available ? "" : "disabled"}>${esc(item.label)}${item.available ? "" : "（未配置）"}</option>`
+    `<option value="${esc(item.provider)}" ${item.provider === appState.modelProvider ? "selected" : ""} ${item.available ? "" : "disabled"}>${esc(item.label)} · ${esc(item.model)}${item.available ? "" : "（未配置）"}</option>`
   ).join("");
   select.title = selected ? `${selected.label} · ${selected.route} · ${selected.model}` : "没有可用模型";
 }

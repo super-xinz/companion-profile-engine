@@ -51,6 +51,14 @@ def test_model_catalog_exposes_six_openrouter_models(monkeypatch):
     options = public_model_options()["options"]
     assert [item["provider"] for item in options] == list(MODEL_PROVIDERS)
     assert all(item["route"] == "OpenRouter" and item["available"] for item in options)
+    assert {item["provider"]: item["label"] for item in options} == {
+        "deepseek": "DeepSeek V3.2",
+        "claude": "Anthropic Claude Sonnet Latest",
+        "gpt": "OpenAI GPT Latest",
+        "glm": "Z.ai GLM 5.2",
+        "gemini": "Google Gemini Pro Latest",
+        "kimi": "Moonshot Kimi Latest",
+    }
     for provider, model in expected_models.items():
         endpoint = get_model_endpoint(provider)
         assert endpoint.model == model

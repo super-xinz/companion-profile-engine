@@ -17,6 +17,10 @@ def test_demo_page_and_conversation_flow():
             assert "规则管理" in page.text
             assert 'id="modelProviderSelect"' in page.text
 
+            script = client.get("/assets/demo.js")
+            assert script.status_code == 200
+            assert '${esc(item.label)} · ${esc(item.model)}' in script.text
+
             started = client.post("/demo/api/start", json={
                 "display_name": "演示用户",
                 "birth_date": "1989-10-15",
