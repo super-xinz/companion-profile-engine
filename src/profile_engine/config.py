@@ -9,6 +9,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from .model_catalog import MODEL_PROVIDERS
 
 
+LEGACY_MODEL_ALIASES = {
+    "~anthropic/claude-sonnet-latest": "anthropic/claude-sonnet-5",
+    "~openai/gpt-latest": "openai/gpt-5.6-sol",
+    "~google/gemini-pro-latest": "google/gemini-3.1-pro-preview",
+    "~moonshotai/kimi-latest": "moonshotai/kimi-k3",
+}
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PROFILE_", env_file=".env", extra="ignore")
 
@@ -54,6 +62,12 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_mode(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator("claude_model", "gpt_model", "gemini_model", "kimi_model")
+    @classmethod
+    def use_explicit_model_id(cls, value: str) -> str:
+        normalized = value.strip()
+        return LEGACY_MODEL_ALIASES.get(normalized, normalized)
 
     @property
     def is_production(self) -> bool:

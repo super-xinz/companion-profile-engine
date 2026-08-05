@@ -65,6 +65,20 @@ def test_model_catalog_exposes_six_openrouter_models(monkeypatch):
         assert endpoint.api_key == "secret"
 
 
+def test_legacy_latest_aliases_are_migrated_to_explicit_model_ids():
+    settings = Settings(
+        _env_file=None,
+        claude_model="~anthropic/claude-sonnet-latest",
+        gpt_model="~openai/gpt-latest",
+        gemini_model="~google/gemini-pro-latest",
+        kimi_model="~moonshotai/kimi-latest",
+    )
+    assert settings.claude_model == "anthropic/claude-sonnet-5"
+    assert settings.gpt_model == "openai/gpt-5.6-sol"
+    assert settings.gemini_model == "google/gemini-3.1-pro-preview"
+    assert settings.kimi_model == "moonshotai/kimi-k3"
+
+
 def test_deepseek_extractor_uses_openrouter_and_validates_structured_frames(monkeypatch):
     captured = {}
 
