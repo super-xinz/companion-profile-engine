@@ -167,7 +167,6 @@ def derive_portrait(profile: dict) -> dict:
 
 
 def build_profile_table_view(profile: dict) -> dict:
-    traits = flattened_traits(profile)
     return {
         "identity": profile.get("identity", {}),
         "birth_analysis": profile.get("birth_analysis", {}),
@@ -190,7 +189,16 @@ def build_profile_table_view(profile: dict) -> dict:
             "confidence": profile.get("enneagram_profile", {}).get("confidence"),
             "interaction_strategy": profile.get("enneagram_profile", {}).get("interaction_strategy", {}),
         },
-        "core_traits": {key: {"value": value["value"], "confidence": value["confidence"]} for key, value in traits.items()},
+        "core_traits": {
+            category_key: {
+                trait_key: {
+                    "value": trait.get("value"),
+                    "confidence": trait.get("confidence"),
+                }
+                for trait_key, trait in category.items()
+            }
+            for category_key, category in profile.get("core_traits", {}).items()
+        },
         "behavior_style": profile.get("behavior_style", {}),
         "language_style": profile.get("language_style", {}),
         "portrait": profile.get("portrait", {}),

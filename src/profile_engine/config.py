@@ -6,6 +6,8 @@ from pathlib import Path
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .model_catalog import MODEL_PROVIDERS
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PROFILE_", env_file=".env", extra="ignore")
@@ -23,6 +25,10 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     deepseek_model: str = "deepseek/deepseek-v3.2"
     claude_model: str = "~anthropic/claude-sonnet-latest"
+    gpt_model: str = "~openai/gpt-latest"
+    glm_model: str = "z-ai/glm-5.2"
+    gemini_model: str = "~google/gemini-pro-latest"
+    kimi_model: str = "~moonshotai/kimi-latest"
     openrouter_site_url: str | None = None
     openrouter_app_name: str = "Companion Profile Engine"
     model_timeout_seconds: float = 30.0
@@ -75,8 +81,10 @@ class Settings(BaseSettings):
         errors: list[str] = []
         if self.environment not in {"development", "test", "production"}:
             errors.append("PROFILE_ENVIRONMENT 必须是 development、test 或 production")
-        if self.default_model_provider not in {"deepseek", "claude"}:
-            errors.append("PROFILE_DEFAULT_MODEL_PROVIDER 必须是 deepseek 或 claude")
+        if self.default_model_provider not in MODEL_PROVIDERS:
+            errors.append(
+                "PROFILE_DEFAULT_MODEL_PROVIDER 必须是 " + "、".join(MODEL_PROVIDERS)
+            )
         if self.semantic_extractor not in {"deterministic", "model"}:
             errors.append("PROFILE_SEMANTIC_EXTRACTOR 必须是 deterministic 或 model")
         if self.semantic_extractor == "model":

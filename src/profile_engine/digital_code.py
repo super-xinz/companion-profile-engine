@@ -60,7 +60,14 @@ def _summary(label: str, code: str, components: list[dict[str, Any]]) -> tuple[s
             continue
         seen.add(normalized)
         selected.append({**item, "text": normalized[:240]})
-    coverage = round(sum(item["weight"] for item in selected), 4)
+    total_weight = sum(item["weight"] for item in components)
+    represented_texts = {item["text"] for item in selected}
+    represented_weight = sum(
+        item["weight"]
+        for item in components
+        if " ".join(item["text"].split()) in represented_texts
+    )
+    coverage = round(represented_weight / total_weight, 4) if total_weight else 0.0
     tiers = {
         "主导": [],
         "支撑": [],

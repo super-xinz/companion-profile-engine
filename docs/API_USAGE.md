@@ -32,7 +32,7 @@ sequenceDiagram
 
 画像引擎只摄取用户表达；`assistant_message` 不属于当前摄取 Schema。BFF 可把最近 user/assistant 历史映射到 `context.recent_turns`。`turn_id` 应同时映射为 `message_id` 和 `Idempotency-Key`，防止网络重试导致重复更新。
 
-仓库内 `/demo` 页面就是上述编排的可运行 Demo：其后端 `/demo/api/chat` 先调用画像引擎，再读取更新后的画像和回答策略，最后调用界面所选的 DeepSeek V3.2 或 Claude 生成回复。两个模型均经 OpenRouter，浏览器不会直接持有画像 API Key 或模型 API Key。
+仓库内 `/demo` 页面就是上述编排的可运行 Demo：其后端 `/demo/api/chat` 先调用画像引擎，再读取更新后的画像和回答策略，最后调用界面所选的 DeepSeek、Claude、GPT、GLM、Gemini 或 Kimi 生成回复。所有模型均经 OpenRouter，浏览器不会直接持有画像 API Key 或模型 API Key。
 
 ## 2. 启动
 
@@ -70,7 +70,7 @@ Linux/macOS：
 PROFILE_API_KEY=local-development-key PROFILE_TENANT_ID=test-tenant ./scripts/smoke-test.sh http://127.0.0.1:8000
 ```
 
-成功标准是脚本退出码为 0、数据库状态为 `ok`。`PROFILE_SEMANTIC_EXTRACTOR=model` 时，必须配置 `PROFILE_OPENROUTER_API_KEY`、模型名和外部语义处理授权；消息请求可用 `model_provider=deepseek|claude` 选择模型。`deterministic` 只用于无外部模型的回归和降级。
+成功标准是脚本退出码为 0、数据库状态为 `ok`。`PROFILE_SEMANTIC_EXTRACTOR=model` 时，必须配置 `PROFILE_OPENROUTER_API_KEY`、模型名和外部语义处理授权；消息请求可用 `model_provider=deepseek|claude|gpt|glm|gemini|kimi` 选择模型。`deterministic` 只用于无外部模型的回归和降级。
 
 ## 3. 鉴权与公共 Header
 

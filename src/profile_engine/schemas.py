@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .model_catalog import ModelProvider
+
 
 class Consent(BaseModel):
     profile: bool
@@ -59,7 +61,7 @@ class MessageIngestRequest(BaseModel):
     expected_profile_version: int = Field(ge=1)
     occurred_at: datetime
     text: str = Field(min_length=1, max_length=10000)
-    model_provider: Literal["deepseek", "claude"] | None = None
+    model_provider: ModelProvider | None = None
     context: MessageContext = Field(default_factory=MessageContext)
 
 

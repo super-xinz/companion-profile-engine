@@ -16,8 +16,9 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .db import get_db
 from .extractor import DeterministicSemanticExtractor, SemanticExtractorError
-from .model_gateway import (ModelConfigurationError, ModelProvider,
-                            chat_completion, get_model_endpoint)
+from .model_catalog import ModelProvider
+from .model_gateway import (ModelConfigurationError, chat_completion,
+                            get_model_endpoint)
 from .models import ChatMessage, Conversation, RulePack, User
 from .schemas import Consent, ConversationTurn, MessageContext, MessageIngestRequest, ProfileInitRequest
 from .service import get_profile, ingest_message, init_profile

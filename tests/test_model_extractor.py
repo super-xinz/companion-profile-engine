@@ -2,8 +2,11 @@ import json
 
 import httpx
 
+from profile_engine.config import Settings
 from profile_engine.extractor import ModelSemanticExtractor, SemanticExtractorError
-from profile_engine.model_gateway import ModelEndpoint
+from profile_engine.model_catalog import MODEL_PROVIDERS
+from profile_engine.model_gateway import (ModelEndpoint, get_model_endpoint,
+                                          public_model_options)
 
 
 def endpoint(provider="deepseek"):
@@ -30,6 +33,28 @@ def semantic_payload():
         "reply_guidance": {"intent": "self_disclosure", "tone": "warm", "empathy_first": True,
             "answer_first": False, "max_sentences": 3, "question_count": 1, "structure_level": "simple",
             "focus": "回应社交后的恢复需要", "avoid": ["下结论"], "requires_fresh_information": False}}
+
+
+def test_model_catalog_exposes_six_openrouter_models(monkeypatch):
+    settings = Settings(_env_file=None, openrouter_api_key="secret")
+    monkeypatch.setattr("profile_engine.model_gateway.get_settings", lambda: settings)
+    expected_models = {
+        "deepseek": "deepseek/deepseek-v3.2",
+        "claude": "~anthropic/claude-sonnet-latest",
+        "gpt": "~openai/gpt-latest",
+        "glm": "z-ai/glm-5.2",
+        "gemini": "~google/gemini-pro-latest",
+        "kimi": "~moonshotai/kimi-latest",
+    }
+
+    assert set(MODEL_PROVIDERS) == set(expected_models)
+    options = public_model_options()["options"]
+    assert [item["provider"] for item in options] == list(MODEL_PROVIDERS)
+    assert all(item["route"] == "OpenRouter" and item["available"] for item in options)
+    for provider, model in expected_models.items():
+        endpoint = get_model_endpoint(provider)
+        assert endpoint.model == model
+        assert endpoint.api_key == "secret"
 
 
 def test_deepseek_extractor_uses_openrouter_and_validates_structured_frames(monkeypatch):
