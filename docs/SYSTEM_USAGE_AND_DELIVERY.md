@@ -13,11 +13,11 @@
 
 ## 系统配置
 
-- 服务版本：`0.5.3`；
+- 服务版本：`0.6.0`；
 - API 版本：`v1`；
 - 生产存储：Zeabur PostgreSQL；
 - 默认模型选项：DeepSeek V3.2；
-- 可选模型参数：`deepseek`、`claude`、`gpt`、`glm`、`gemini`、`kimi`；
+- 可选模型：`deepseek` → `deepseek/deepseek-v3.2`、`claude` → `anthropic/claude-sonnet-5`、`gpt` → `openai/gpt-5.6-sol`、`glm` → `z-ai/glm-5.2`、`gemini` → `google/gemini-3.1-pro-preview`、`kimi` → `moonshotai/kimi-k3`；
 - 所有模型均通过 OpenRouter 兼容接口封装，浏览器不持有模型密钥；
 - 当前 Zeabur 香港部署调用 Claude 可能返回上游区域限制错误，选项与 API 契约仍保留。
 

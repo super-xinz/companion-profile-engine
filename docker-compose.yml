@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: profile_engine
       POSTGRES_USER: profile_engine
-      POSTGRES_PASSWORD: local-only-change-me
+      POSTGRES_PASSWORD: local-only-change-me  # pragma: allowlist secret - local development only
     volumes:
       - profile_db:/var/lib/postgresql/data
     healthcheck:
@@ -19,8 +19,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      PROFILE_DATABASE_URL: postgresql+psycopg://profile_engine:local-only-change-me@postgres/profile_engine
-      PROFILE_API_KEY: local-development-key
+      PROFILE_DATABASE_URL: postgresql+psycopg://profile_engine:local-only-change-me@postgres/profile_engine  # pragma: allowlist secret - local development only
+      PROFILE_API_KEY: local-development-key  # pragma: allowlist secret - local development only
       PROFILE_RULE_SOURCE_DIR: /app/rules
       PROFILE_ENVIRONMENT: development
     depends_on:

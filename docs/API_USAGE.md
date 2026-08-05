@@ -150,7 +150,7 @@ curl "$BASE_URL/v1/profiles/demo-xu" -H "X-API-Key: $API_KEY" -H "X-Tenant-ID: $
 }
 ```
 
-成功响应包括：新 `profile_version`、`semantic_frames`、候选/接受/拒绝特征信号、`profile_patch`、`runtime_operations`、`reply_hints`、`strategy_trace` 和 `no_profile_change`。版本冲突返回 409；同一幂等键与相同请求返回缓存结果。
+成功响应包括：新 `profile_version`、`semantic_frames`、候选/接受/拒绝特征信号、`profile_patch`、`runtime_operations`、`reply_hints`、`strategy_trace` 和 `no_profile_change`。版本冲突返回 409；同一幂等键仅在 HTTP 方法、接口路径、资源 ID 和请求体全部相同时返回缓存结果，禁止跨人物或跨接口复用。
 
 ### 解释画像
 
@@ -320,8 +320,11 @@ llm_context = {
 | 403 | `consent_required` | 未授权画像或敏感推断 | 需用户授权，不自动重试 |
 | 404 | `not_found` | 用户/画像不存在 | 可先初始化 |
 | 409 | `profile_version_conflict` | 并发导致版本过期 | 重新读取后最多重试一次 |
+| 411 | `length_required` | 写请求未提供 `Content-Length` | 补齐请求长度后重试 |
+| 413 | `request_too_large` | 请求体超过服务器配置上限 | 缩小请求体 |
 | 429 | `tenant rate limit exceeded` | 租户超过每分钟调用限制 | 按 `Retry-After` 等待 |
-| 422 | FastAPI 校验或 `invalid_operation` | 缺 Header、字段非法、复用幂等键到不同 body | 修正请求，不盲重试 |
+| 422 | FastAPI 校验或 `invalid_operation` | 缺 Header、字段非法、跨接口/资源/请求体复用幂等键 | 修正请求，不盲重试 |
+| 502 | `model_no_response`（网站聊天） | OpenRouter 网络、区域限制或模型无有效返回 | 展示真实错误；不会生成兜底回复 |
 | 503 | `semantic_extractor_unavailable` | 外部语义提取不可用 | 有限退避重试 |
 
 常见问题：画像为空通常是未初始化或用户/租户不一致；画像未更新可能是 `no_profile_change=true`、版本冲突或未获得相应授权。限制注入长度应在 BFF 做字段白名单和字符上限，HIWM 默认 `PROFILE_CONTEXT_MAX_CHARS=8000`。

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "companion-profile-engine"
-version = "0.5.3"
+version = "0.6.0"
 description = "Auditable human profile state machine for companion robots"
 requires-python = ">=3.9"
 dependencies = [
@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9"]
+dev = ["pytest>=9.0.3,<10"]
 
 [project.scripts]
 profile-engine = "profile_engine.main:run"

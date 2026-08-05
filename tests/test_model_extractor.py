@@ -14,7 +14,7 @@ def endpoint(provider="deepseek"):
         provider=provider,
         label="DeepSeek V3.2" if provider == "deepseek" else "Claude",
         route_label="OpenRouter",
-        api_key="secret",
+        api_key="secret",  # pragma: allowlist secret
         base_url="https://openrouter.example/v1",
         model="deepseek/deepseek-v3.2" if provider == "deepseek" else "anthropic/claude-test",
         timeout=30,
@@ -62,7 +62,7 @@ def test_model_catalog_exposes_six_openrouter_models(monkeypatch):
     for provider, model in expected_models.items():
         endpoint = get_model_endpoint(provider)
         assert endpoint.model == model
-        assert endpoint.api_key == "secret"
+        assert endpoint.api_key == "secret"  # pragma: allowlist secret
 
 
 def test_legacy_latest_aliases_are_migrated_to_explicit_model_ids():

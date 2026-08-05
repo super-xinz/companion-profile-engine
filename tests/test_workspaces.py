@@ -8,6 +8,11 @@ from profile_engine.api import app
 from profile_engine.db import SessionLocal
 from profile_engine.demo import demo_auth
 from profile_engine.models import ProfileVersion, User
+from profile_engine.workspace import _actor
+
+
+def test_caller_controlled_actor_header_cannot_impersonate_workspace_members():
+    assert _actor("任意伪造管理员") == "系统管理员"
 
 
 def test_multi_person_profile_and_rule_workspaces():
@@ -23,6 +28,12 @@ def test_multi_person_profile_and_rule_workspaces():
                 "person-1996-03-28", "person-1998-12-06",
             }
             assert template_ids <= {person["user_id"] for person in boot.json()["people"]}
+
+            duplicate_yaml = client.post("/demo/api/rules/documents/parse", headers=headers, json={
+                "asset": "schema",
+                "document_text": "schema_version: v1\nschema_version: v2\n",
+            })
+            assert duplicate_yaml.status_code == 422
 
             for user_id, expected_code in (("person-1989-11-28", "SX/SO｜7w8"), ("person-1996-03-28", "SO/SX｜2w1")):
                 detail = client.get(f"/demo/api/people/{user_id}", headers=headers)
@@ -68,6 +79,19 @@ def test_multi_person_profile_and_rule_workspaces():
                 person["user_id"] for person in searched.json()["people"]
             }
 
+            minimal = client.post("/demo/api/people", headers=headers, json={
+                "display_name": "无生日测试人物", "birth_date": None, "notes": "推断开关回归测试",
+            })
+            assert minimal.status_code == 200, minimal.text
+            with SessionLocal() as db:
+                minimal_user = db.scalar(select(User).where(
+                    User.tenant_id == tenant,
+                    User.tenant_user_id == minimal.json()["person"]["user_id"],
+                ))
+                assert minimal_user is not None
+                assert minimal_user.profile_consent is True
+                assert minimal_user.inference_enabled is True
+
             created = client.post("/demo/api/people", headers=headers, json={
                 "display_name": "测试人物", "birth_date": None, "notes": "隔离测试",
                 "enneagram": {
@@ -104,6 +128,18 @@ def test_multi_person_profile_and_rule_workspaces():
             })
             assert enneagram.status_code == 200, enneagram.text
             assert enneagram.json()["enneagram_profile"]["identity"]["code"] == "SP/SX｜8w9"
+
+            rejected_path = client.post(
+                f"/demo/api/people/{person['user_id']}/manual-edit",
+                headers=headers,
+                json={
+                    "expected_profile_version": enneagram.json()["profile_version"],
+                    "target_path": "runtime.memories",
+                    "value": [],
+                    "reason": "不应允许通过人工编辑覆盖运行时内部结构",
+                },
+            )
+            assert rejected_path.status_code == 422
 
             messages = client.get(
                 f"/demo/api/people/{person['user_id']}/conversations/{conversation['conversation_id']}/messages",
@@ -144,5 +180,19 @@ def test_multi_person_profile_and_rule_workspaces():
             assert isolated.status_code == 200, isolated.text
             assert isolated.json()["isolated"] is True
             assert isolated.json()["production_profile_unchanged"] is True
+
+            malformed = client.post("/demo/api/rules/drafts", headers=headers, json={
+                "title": "异常结构验证", "base_revision_id": revision["id"],
+            })
+            malformed_id = malformed.json()["revision"]["id"]
+            malformed_save = client.put(
+                f"/demo/api/rules/drafts/{malformed_id}",
+                headers=headers,
+                json={"canonical_json": {"schema": []}, "change_summary": "结构错误测试"},
+            )
+            assert malformed_save.status_code == 200, malformed_save.text
+            report = malformed_save.json()["revision"]["validation_report"]
+            assert report["valid"] is False
+            assert "字段类型不正确" in report["errors"][0]
     finally:
         app.dependency_overrides.pop(demo_auth, None)

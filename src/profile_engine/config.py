@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     api_docs_enabled: bool | None = None
     allow_profile_reset: bool | None = None
     rate_limit_per_minute: int = Field(default=120, ge=1, le=10_000)
+    demo_rate_limit_per_minute: int = Field(default=120, ge=1, le=10_000)
+    demo_model_rate_limit_per_minute: int = Field(default=30, ge=1, le=1_000)
+    auth_failure_rate_limit_per_minute: int = Field(default=30, ge=1, le=1_000)
+    max_request_body_bytes: int = Field(default=2_500_000, ge=1_024, le=20_000_000)
     port: int = 8000
 
     @field_validator("database_url")
@@ -106,6 +110,8 @@ class Settings(BaseSettings):
                 errors.append("启用 model 时必须配置 PROFILE_OPENROUTER_API_KEY")
             if not self.allow_external_semantic_processing:
                 errors.append("启用 model 时必须明确设置 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true")
+        if self.is_production and not self.openrouter_base_url.startswith("https://"):
+            errors.append("生产环境 PROFILE_OPENROUTER_BASE_URL 必须使用 HTTPS")
         if self.is_production:
             if not self.database_url.startswith("postgresql+psycopg://"):
                 errors.append("生产环境必须使用 PostgreSQL，禁止使用容器内 SQLite")

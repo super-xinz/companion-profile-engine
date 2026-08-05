@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .model_catalog import ModelProvider
 
@@ -38,14 +38,14 @@ class ProfileInitRequest(BaseModel):
     tenant_user_id: str = Field(min_length=1, max_length=256)
     display_name: str | None = Field(default=None, max_length=256)
     birth_date: date | None = None
-    birth_time: str | None = None
-    timezone: str | None = None
+    birth_time: str | None = Field(default=None, max_length=16)
+    timezone: str | None = Field(default=None, max_length=64)
     enneagram: EnneagramIdentityInput | None = None
     consent: Consent
 
 
 class MessageContext(BaseModel):
-    topic: str | None = None
+    topic: str | None = Field(default=None, max_length=256)
     previous_turn_count: int = Field(default=0, ge=0)
     recent_turns: list["ConversationTurn"] = Field(default_factory=list, max_length=12)
 
@@ -84,12 +84,11 @@ class ForgetRequest(BaseModel):
     target_id: str | None = None
     reason: str = Field(min_length=1, max_length=1000)
 
-    @field_validator("target_id")
-    @classmethod
-    def require_target_for_item_scope(cls, value, info):
-        if info.data.get("scope") in {"memory", "evidence"} and not value:
+    @model_validator(mode="after")
+    def require_target_for_item_scope(self):
+        if self.scope in {"memory", "evidence"} and not self.target_id:
             raise ValueError("memory/evidence scope requires target_id")
-        return value
+        return self
 
 
 class ResetProfileRequest(BaseModel):
@@ -102,10 +101,10 @@ class ResetProfileRequest(BaseModel):
 class SemanticFrame(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    frame_id: str
+    frame_id: str = Field(min_length=1, max_length=64)
     subject: Literal["user", "other_person", "robot", "group", "unknown"]
-    predicate: str
-    object: str | None = None
+    predicate: str = Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
+    object: str | None = Field(default=None, max_length=500)
     semantic_domain: Literal[
         "identity_fact", "preference", "habit", "decision", "task_behavior",
         "social_behavior", "relationship_behavior", "emotion", "self_evaluation",
@@ -119,7 +118,7 @@ class SemanticFrame(BaseModel):
     context: Literal["work", "family", "friendship", "romantic", "stranger", "conflict", "stress", "leisure", "general", "unknown"] = "general"
     explicitness: float = Field(ge=0, le=1)
     extractor_confidence: float = Field(ge=0, le=1)
-    supporting_span: str
+    supporting_span: str = Field(min_length=1, max_length=500)
 
 
 class TraitSignal(BaseModel):

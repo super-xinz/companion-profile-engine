@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 import json
 import logging
 import uuid
@@ -8,7 +7,7 @@ from datetime import date, datetime, timezone
 from typing import Literal
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
@@ -22,11 +21,14 @@ from .model_gateway import (ModelConfigurationError, chat_completion,
                             get_model_endpoint)
 from .models import ChatMessage, Conversation, RulePack, User
 from .schemas import Consent, ConversationTurn, MessageContext, MessageIngestRequest, ProfileInitRequest
+from .security import SlidingWindowRateLimiter, constant_time_equal
 from .service import get_profile, ingest_message, init_profile
 
 
 router = APIRouter(prefix="/demo/api", tags=["demo"])
 logger = logging.getLogger(__name__)
+_demo_rate_limiter = SlidingWindowRateLimiter()
+_demo_model_rate_limiter = SlidingWindowRateLimiter()
 
 
 class DemoStartRequest(BaseModel):
@@ -49,14 +51,35 @@ class DemoChatRequest(BaseModel):
     history: list[DemoHistoryItem] = Field(default_factory=list, max_length=12)
 
 
-def demo_auth(x_demo_code: str = Header(alias="X-Demo-Code")) -> str:
+def demo_auth(request: Request, response: Response,
+              x_demo_code: str = Header(alias="X-Demo-Code", max_length=256)) -> str:
     settings = get_settings()
     if not settings.demo_features_active:
         raise HTTPException(status_code=404, detail="Demo 功能未启用")
     expected = settings.demo_access_code
     if not expected and settings.environment == "development":
         expected = "demo"
-    if not expected or not hmac.compare_digest(x_demo_code, expected):
+    source = request.client.host if request.client else "unknown"
+    allowed, remaining, retry_after = _demo_rate_limiter.check(
+        source, settings.demo_rate_limit_per_minute
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429, detail="请求过于频繁",
+            headers={"Retry-After": str(retry_after)},
+        )
+    if request.url.path in {"/demo/api/chat", "/demo/api/rules/test"}:
+        model_allowed, model_remaining, model_retry_after = _demo_model_rate_limiter.check(
+            source, settings.demo_model_rate_limit_per_minute
+        )
+        if not model_allowed:
+            raise HTTPException(
+                status_code=429, detail="模型调用过于频繁",
+                headers={"Retry-After": str(model_retry_after)},
+            )
+        response.headers["X-Model-RateLimit-Remaining"] = str(model_remaining)
+    response.headers["X-Demo-RateLimit-Remaining"] = str(remaining)
+    if not expected or not constant_time_equal(x_demo_code, expected):
         raise HTTPException(status_code=401, detail="访问密码不正确")
     return settings.demo_tenant_id
 
@@ -237,37 +260,61 @@ def demo_chat(body: DemoChatRequest, request: Request, tenant_id: str = Depends(
         ChatMessage.conversation_id == conversation.id,
         ChatMessage.external_id == body.message_id,
     ))
+    assistant_message_id = f"assistant_{body.message_id}"
+    if existing_message:
+        if existing_message.role != "user" or existing_message.content != body.text:
+            raise HTTPException(status_code=409, detail="同一 message_id 不能用于不同消息")
+        existing_assistant = db.scalar(select(ChatMessage).where(
+            ChatMessage.conversation_id == conversation.id,
+            ChatMessage.external_id == assistant_message_id,
+        ))
+        if existing_assistant:
+            cached_engine = existing_assistant.engine_trace or {}
+            return {
+                "request_id": request.state.request_id,
+                "assistant_reply": existing_assistant.content,
+                "assistant_message_id": assistant_message_id,
+                "chat_responder_version": cached_engine.get("strategy_trace", {}).get(
+                    "chat_responder", "cached-response"
+                ),
+                "engine": cached_engine,
+            }
     if not existing_message:
-        db.add(ChatMessage(
+        existing_message = ChatMessage(
             conversation_id=conversation.id, external_id=body.message_id,
             role="user", content=body.text, profile_version=body.expected_profile_version,
-        ))
+        )
+        db.add(existing_message)
         if conversation.title == "新的陪伴对话":
             conversation.title = body.text[:24] + ("…" if len(body.text) > 24 else "")
         db.flush()
-    message = MessageIngestRequest(
-        conversation_id=body.conversation_id,
-        message_id=body.message_id,
-        expected_profile_version=body.expected_profile_version,
-        occurred_at=datetime.now(timezone.utc),
-        text=body.text,
-        model_provider=body.model_provider,
-        context=MessageContext(
-            previous_turn_count=len(body.history),
-            recent_turns=[ConversationTurn(role=item.role, content=item.content) for item in body.history[-12:]],
-        ),
-    )
-    try:
-        engine = ingest_message(db, tenant_id, body.user_id, message, _current_pack(request, db),
-                                request.state.request_id, f"demo-chat-{body.user_id}-{body.message_id}")
-    except SemanticExtractorError as exc:
-        logger.warning("Semantic extraction unavailable; using deterministic fallback: %s", exc)
-        engine = ingest_message(
-            db, tenant_id, body.user_id, message, _current_pack(request, db),
-            request.state.request_id, f"demo-chat-{body.user_id}-{body.message_id}",
-            semantic_extractor=DeterministicSemanticExtractor(),
+    engine = existing_message.engine_trace
+    if engine is None:
+        message = MessageIngestRequest(
+            conversation_id=body.conversation_id,
+            message_id=body.message_id,
+            expected_profile_version=body.expected_profile_version,
+            occurred_at=datetime.now(timezone.utc),
+            text=body.text,
+            model_provider=body.model_provider,
+            context=MessageContext(
+                previous_turn_count=len(body.history),
+                recent_turns=[ConversationTurn(role=item.role, content=item.content) for item in body.history[-12:]],
+            ),
         )
-        engine["strategy_trace"]["semantic_fallback"] = f"{body.model_provider}_unavailable"
+        try:
+            engine = ingest_message(db, tenant_id, body.user_id, message, _current_pack(request, db),
+                                    request.state.request_id, f"demo-chat-{body.user_id}-{body.message_id}")
+        except SemanticExtractorError as exc:
+            logger.warning("Semantic extraction unavailable; using deterministic fallback: %s", exc)
+            engine = ingest_message(
+                db, tenant_id, body.user_id, message, _current_pack(request, db),
+                request.state.request_id, f"demo-chat-{body.user_id}-{body.message_id}",
+                semantic_extractor=DeterministicSemanticExtractor(),
+            )
+            engine["strategy_trace"]["semantic_fallback"] = f"{body.model_provider}_unavailable"
+    else:
+        engine["strategy_trace"].pop("chat_model_error", None)
     current = get_profile(db, tenant_id, body.user_id)["profile"]
     engine["strategy_trace"]["model_provider"] = body.model_provider
     try:
@@ -280,6 +327,10 @@ def demo_chat(body: DemoChatRequest, request: Request, tenant_id: str = Depends(
             "model": exc.model,
             "http_status": exc.http_status,
         }
+        existing_message.engine_trace = engine
+        existing_message.profile_version = engine["profile_version"]
+        conversation.updated_at = datetime.now(timezone.utc)
+        db.commit()
         return JSONResponse(status_code=502, content={
             "request_id": request.state.request_id,
             "code": "model_no_response",
@@ -295,17 +346,12 @@ def demo_chat(body: DemoChatRequest, request: Request, tenant_id: str = Depends(
         })
     engine["strategy_trace"]["consumed_by_chatbot"] = True
     engine["strategy_trace"]["chat_responder"] = responder
-    assistant_message_id = f"assistant_{body.message_id}"
-    assistant = db.scalar(select(ChatMessage).where(
-        ChatMessage.conversation_id == conversation.id,
-        ChatMessage.external_id == assistant_message_id,
+    existing_message.engine_trace = None
+    db.add(ChatMessage(
+        conversation_id=conversation.id, external_id=assistant_message_id,
+        role="assistant", content=reply, engine_trace=engine,
+        profile_version=engine["profile_version"],
     ))
-    if not assistant:
-        db.add(ChatMessage(
-            conversation_id=conversation.id, external_id=assistant_message_id,
-            role="assistant", content=reply, engine_trace=engine,
-            profile_version=engine["profile_version"],
-        ))
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
     return {"request_id": request.state.request_id, "assistant_reply": reply,

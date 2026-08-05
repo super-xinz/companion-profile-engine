@@ -67,7 +67,11 @@ class CompiledRulePack:
 
 def _load_yaml(path: Path) -> dict:
     try:
-        value = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
+        loader = UniqueKeyLoader(path.read_text(encoding="utf-8"))
+        try:
+            value = loader.get_single_data()
+        finally:
+            loader.dispose()
     except (OSError, yaml.YAMLError) as exc:
         raise RuleValidationError([f"{path.name}: YAML 无法解析: {exc}"]) from exc
     if not isinstance(value, dict):
