@@ -88,11 +88,20 @@ def _apply_security_headers(response: Response, request: Request, req_id: str, s
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; "
-        "form-action 'self'; frame-ancestors 'none'; object-src 'none'"
-    )
+    if request.url.path == "/docs":
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "img-src 'self' data: https://fastapi.tiangolo.com; connect-src 'self'; "
+            "font-src 'self' https://cdn.jsdelivr.net; base-uri 'none'; form-action 'self'; "
+            "frame-ancestors 'none'; object-src 'none'"
+        )
+    else:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; "
+            "form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+        )
     if request.url.path.startswith(("/v1", "/demo/api")):
         response.headers["Cache-Control"] = "no-store"
     if settings.is_production:

@@ -31,6 +31,10 @@ def test_b2b_capabilities_security_headers_and_api_key_challenge():
         assert response.headers["x-content-type-options"] == "nosniff"
         assert "default-src 'none'" in response.headers["content-security-policy"]
 
+        docs = client.get("/docs")
+        assert docs.status_code == 200
+        assert "https://cdn.jsdelivr.net" in docs.headers["content-security-policy"]
+
         sanitized = client.get("/health", headers={"X-Request-ID": "bad request id\t"})
         assert sanitized.status_code == 200
         assert sanitized.headers["x-request-id"] != "bad request id\t"
