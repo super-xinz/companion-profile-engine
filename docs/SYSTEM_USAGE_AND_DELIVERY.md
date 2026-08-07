@@ -13,7 +13,7 @@
 
 ## 系统配置
 
-- 服务版本：`0.6.0`；
+- 服务版本：`0.7.0`；
 - API 版本：`v1`；
 - 生产存储：Zeabur PostgreSQL；
 - 默认模型选项：DeepSeek V3.2；
@@ -45,7 +45,7 @@ Idempotency-Key: <request-id>
 5. `GET /v1/profiles/{user_id}`：确认画像版本和证据更新；
 6. 使用相同 `Idempotency-Key` 重放：结果相同且版本不重复增长；
 7. 使用旧 `expected_profile_version` 写入：返回 `409 profile_version_conflict`；
-8. `POST /v1/profiles/{user_id}:forget`：使用 `scope=all_profile` 清理测试数据。
+8. `POST /v1/profiles/{user_id}:delete`：显式确认并永久清理测试人物、画像、对话和敏感缓存。
 
 完整请求体、JavaScript/Python 示例见 [API 使用文档](API_USAGE.md)。可直接导入 [Postman Collection](../postman/companion-profile-engine.postman_collection.json)。
 

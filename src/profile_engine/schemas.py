@@ -81,7 +81,7 @@ class SetEnneagramRequest(BaseModel):
 class ForgetRequest(BaseModel):
     expected_profile_version: int = Field(ge=1)
     scope: Literal["memory", "evidence", "birth_inference", "enneagram", "all_profile"]
-    target_id: str | None = None
+    target_id: str | None = Field(default=None, max_length=128)
     reason: str = Field(min_length=1, max_length=1000)
 
     @model_validator(mode="after")
@@ -96,6 +96,14 @@ class ResetProfileRequest(BaseModel):
 
     confirm: Literal[True]
     display_name: str | None = Field(default=None, max_length=256)
+
+
+class DeleteProfileRequest(BaseModel):
+    """Explicit confirmation for permanent profile and conversation deletion."""
+
+    expected_profile_version: int = Field(ge=1)
+    confirm: Literal[True]
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class SemanticFrame(BaseModel):

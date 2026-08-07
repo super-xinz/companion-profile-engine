@@ -120,6 +120,7 @@ class IdempotencyRecord(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("idem"))
     tenant_id: Mapped[str] = mapped_column(String(128))
     idempotency_key: Mapped[str] = mapped_column(String(256))
+    resource_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     request_hash: Mapped[str] = mapped_column(String(64))
     status_code: Mapped[int] = mapped_column(Integer)
     response_body: Mapped[dict] = mapped_column(JSON)

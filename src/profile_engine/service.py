@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
@@ -946,13 +946,25 @@ def forget_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Forge
         profile["enneagram_profile"]["parameter_input"] = build_portrait_parameter_input(profile)
     else:
         user.inference_enabled = False
+        user.profile_consent = False
+        user.sensitive_inference_consent = False
         for item in db.scalars(select(ProfileEvidence).where(ProfileEvidence.user_id == user.id, ProfileEvidence.invalidated.is_(False))):
             item.invalidated = True; item.invalidated_at = datetime.now(timezone.utc); affected.append(item.id)
         for item in db.scalars(select(Memory).where(Memory.user_id == user.id, Memory.active.is_(True))):
             item.active = False; affected.append(item.id)
+        db.execute(delete(CurrentState).where(CurrentState.user_id == user.id))
+        db.execute(delete(RuntimePreference).where(RuntimePreference.user_id == user.id))
+        db.execute(delete(ManualOverride).where(ManualOverride.user_id == user.id))
+        for category in profile["core_traits"].values():
+            for entry in category.values():
+                entry.update(value=0.5, confidence=0.1, evidence_refs=[])
         profile["runtime"] = {"interaction_preferences": {}, "current_state": {}, "memories": []}
+        profile["birth_analysis"]["numerology_code"] = None
         profile["digital_code_profile"] = empty_digital_code_profile()
         profile["enneagram_profile"] = empty_enneagram_profile()
+        profile.pop("source_portrait", None)
+        profile.pop("source_profile_document", None)
+        rebuild_derived(profile, pack.canonical_json["schema"])
         profile["meta"]["warnings"] = ["画像推断已关闭，历史证据与记忆已失效。"]
     new_no = version.version_no + 1; profile["meta"]["profile_version"] = new_no; recalculate_meta(profile)
     db.add(ProfileVersion(user_id=user.id, version_no=new_no, schema_version=profile["meta"]["schema_version"],

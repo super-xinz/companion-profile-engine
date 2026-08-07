@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     demo_model_rate_limit_per_minute: int = Field(default=30, ge=1, le=1_000)
     auth_failure_rate_limit_per_minute: int = Field(default=30, ge=1, le=1_000)
     max_request_body_bytes: int = Field(default=2_500_000, ge=1_024, le=20_000_000)
+    idempotency_ttl_hours: int = Field(default=24, ge=1, le=168)
     port: int = 8000
 
     @field_validator("database_url")

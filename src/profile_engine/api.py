@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from importlib.resources import files
 from pathlib import Path
 
@@ -20,15 +21,16 @@ from .config import get_settings
 from .db import SessionLocal, get_db, init_db
 from .demo import router as demo_router
 from .workspace import router as workspace_router
-from .models import IdempotencyRecord, RulePack, User
+from .models import AuditLog, IdempotencyRecord, RulePack, User
 from .extractor import SemanticExtractorError
 from .model_gateway import public_model_options
 from .rule_compiler import compile_rule_pack
 from .security import SlidingWindowRateLimiter, constant_time_equal, safe_request_id
-from .schemas import (Consent, CorrectionRequest, ForgetRequest, MessageIngestRequest,
-                      ProfileInitRequest, ResetProfileRequest, SetEnneagramRequest)
+from .schemas import (Consent, CorrectionRequest, DeleteProfileRequest, ForgetRequest,
+                      MessageIngestRequest, ProfileInitRequest, ResetProfileRequest,
+                      SetEnneagramRequest)
 from .service import (ConsentError, NotFoundError, VersionConflictError, correct_profile,
-                      ensure_rule_pack, explain_profile, forget_profile, get_profile,
+                      current_version, ensure_rule_pack, explain_profile, forget_profile, get_profile,
                       ingest_message, init_profile, request_id, set_enneagram_profile)
 from .workspace import _sync_template_people
 
@@ -241,17 +243,33 @@ def _request_hash(request: Request, body: object) -> str:
     return hashlib.sha256(json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _cached(db: Session, tenant_id: str, key: str, request: Request, body: object) -> dict | None:
+def _resource_key(tenant_id: str, resource_id: str) -> str:
+    return hashlib.sha256(f"{tenant_id}\0{resource_id}".encode()).hexdigest()
+
+
+def _cached(db: Session, tenant_id: str, key: str, resource_id: str,
+            request: Request, body: object) -> dict | None:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=get_settings().idempotency_ttl_hours)
+    db.execute(delete(IdempotencyRecord).where(
+        IdempotencyRecord.tenant_id == tenant_id,
+        IdempotencyRecord.created_at < cutoff,
+    ))
+    db.flush()
     record = db.scalar(select(IdempotencyRecord).where(IdempotencyRecord.tenant_id == tenant_id, IdempotencyRecord.idempotency_key == key))
     if not record:
         return None
-    if record.request_hash != _request_hash(request, body):
+    if record.resource_key != _resource_key(tenant_id, resource_id) or record.request_hash != _request_hash(request, body):
         raise ValueError("同一 Idempotency-Key 不能用于不同接口、资源或请求体")
     return record.response_body
 
 
-def _cache(db: Session, tenant_id: str, key: str, request: Request, body: object, response: dict) -> None:
-    db.add(IdempotencyRecord(tenant_id=tenant_id, idempotency_key=key, request_hash=_request_hash(request, body), status_code=200, response_body=response))
+def _cache(db: Session, tenant_id: str, key: str, resource_id: str,
+           request: Request, body: object, response: dict) -> None:
+    db.add(IdempotencyRecord(
+        tenant_id=tenant_id, idempotency_key=key,
+        resource_key=_resource_key(tenant_id, resource_id),
+        request_hash=_request_hash(request, body), status_code=200, response_body=response,
+    ))
     db.commit()
 
 
@@ -312,11 +330,11 @@ def rules_page() -> HTMLResponse:
 @app.post("/v1/profiles:init", tags=["profiles"])
 def initialize(body: ProfileInitRequest, request: Request, tenant_id: str = Depends(auth_context),
                idem: str = Depends(idempotency_key), db: Session = Depends(get_db)) -> dict:
-    cached = _cached(db, tenant_id, idem, request, body)
+    cached = _cached(db, tenant_id, idem, body.tenant_user_id, request, body)
     if cached: return cached
     pack = current_pack(request, db)
     response = init_profile(db, tenant_id, body, pack, request.state.request_id, idem)
-    _cache(db, tenant_id, idem, request, body, response)
+    _cache(db, tenant_id, idem, body.tenant_user_id, request, body, response)
     return response
 
 
@@ -328,11 +346,11 @@ def read_profile(user_id: str, tenant_id: str = Depends(auth_context), db: Sessi
 @app.post("/v1/profiles/{user_id}/messages:ingest", tags=["messages"])
 def ingest(user_id: str, body: MessageIngestRequest, request: Request, tenant_id: str = Depends(auth_context),
            idem: str = Depends(idempotency_key), db: Session = Depends(get_db)) -> dict:
-    cached = _cached(db, tenant_id, idem, request, body)
+    cached = _cached(db, tenant_id, idem, user_id, request, body)
     if cached: return cached
     pack = current_pack(request, db)
     response = ingest_message(db, tenant_id, user_id, body, pack, request.state.request_id, idem)
-    _cache(db, tenant_id, idem, request, body, response)
+    _cache(db, tenant_id, idem, user_id, request, body, response)
     return response
 
 
@@ -345,10 +363,10 @@ def explain(user_id: str, field: str | None = Query(default=None), tenant_id: st
 @app.post("/v1/profiles/{user_id}:correct", tags=["profiles"])
 def correct(user_id: str, body: CorrectionRequest, request: Request, tenant_id: str = Depends(auth_context),
             idem: str = Depends(idempotency_key), db: Session = Depends(get_db)) -> dict:
-    cached = _cached(db, tenant_id, idem, request, body)
+    cached = _cached(db, tenant_id, idem, user_id, request, body)
     if cached: return cached
     response = correct_profile(db, tenant_id, user_id, body, current_pack(request, db), request.state.request_id, idem)
-    _cache(db, tenant_id, idem, request, body, response)
+    _cache(db, tenant_id, idem, user_id, request, body, response)
     return response
 
 
@@ -361,7 +379,7 @@ def set_enneagram(
     idem: str = Depends(idempotency_key),
     db: Session = Depends(get_db),
 ) -> dict:
-    cached = _cached(db, tenant_id, idem, request, body)
+    cached = _cached(db, tenant_id, idem, user_id, request, body)
     if cached:
         return cached
     response = set_enneagram_profile(
@@ -373,17 +391,17 @@ def set_enneagram(
         request.state.request_id,
         idem,
     )
-    _cache(db, tenant_id, idem, request, body, response)
+    _cache(db, tenant_id, idem, user_id, request, body, response)
     return response
 
 
 @app.post("/v1/profiles/{user_id}:forget", tags=["profiles"])
 def forget(user_id: str, body: ForgetRequest, request: Request, tenant_id: str = Depends(auth_context),
            idem: str = Depends(idempotency_key), db: Session = Depends(get_db)) -> dict:
-    cached = _cached(db, tenant_id, idem, request, body)
+    cached = _cached(db, tenant_id, idem, user_id, request, body)
     if cached: return cached
     response = forget_profile(db, tenant_id, user_id, body, current_pack(request, db), request.state.request_id, idem)
-    _cache(db, tenant_id, idem, request, body, response)
+    _cache(db, tenant_id, idem, user_id, request, body, response)
     return response
 
 
@@ -403,7 +421,7 @@ def reset_profile(
 ) -> dict:
     if not get_settings().profile_reset_active:
         raise HTTPException(status_code=404, detail="画像重置功能未启用")
-    cached = _cached(db, tenant_id, idem, request, body)
+    cached = _cached(db, tenant_id, idem, user_id, request, body)
     if cached:
         return cached
 
@@ -412,6 +430,10 @@ def reset_profile(
         User.tenant_user_id == user_id,
     ))
     if existing:
+        db.execute(delete(IdempotencyRecord).where(
+            IdempotencyRecord.tenant_id == tenant_id,
+            IdempotencyRecord.resource_key == _resource_key(tenant_id, user_id),
+        ))
         # A bulk delete lets the database enforce the declared ON DELETE
         # CASCADE relationships without loading sensitive child records.
         db.execute(delete(User).where(User.id == existing.id))
@@ -436,7 +458,78 @@ def reset_profile(
         "profile": result["profile"],
         "rule_pack": result["rule_pack"],
     }
-    _cache(db, tenant_id, idem, request, body, response)
+    _cache(db, tenant_id, idem, user_id, request, body, response)
+    return response
+
+
+@app.post(
+    "/v1/profiles/{user_id}:delete",
+    tags=["profiles"],
+    summary="永久删除人物画像",
+    description="永久删除该人物的画像、证据、记忆、状态、对话、人工覆盖、历史审计快照和旧幂等缓存。",
+)
+def delete_profile(
+    user_id: str,
+    body: DeleteProfileRequest,
+    request: Request,
+    tenant_id: str = Depends(auth_context),
+    idem: str = Depends(idempotency_key),
+    db: Session = Depends(get_db),
+) -> dict:
+    cached = _cached(db, tenant_id, idem, user_id, request, body)
+    if cached:
+        return cached
+    user = db.scalar(select(User).where(
+        User.tenant_id == tenant_id,
+        User.tenant_user_id == user_id,
+    ))
+    if not user:
+        raise NotFoundError("人物画像不存在")
+    version = current_version(db, user)
+    if version.version_no != body.expected_profile_version:
+        raise VersionConflictError(body.expected_profile_version, version.version_no)
+
+    db.execute(delete(IdempotencyRecord).where(
+        IdempotencyRecord.tenant_id == tenant_id,
+        IdempotencyRecord.resource_key == _resource_key(tenant_id, user_id),
+    ))
+    db.execute(delete(AuditLog).where(
+        AuditLog.tenant_id == tenant_id,
+        AuditLog.user_id == user.id,
+    ))
+    db.execute(delete(User).where(User.id == user.id))
+    db.flush()
+
+    deleted_at = datetime.now(timezone.utc).isoformat()
+    response = {
+        "request_id": request.state.request_id,
+        "deleted": True,
+        "deleted_at": deleted_at,
+    }
+    db.add(AuditLog(
+        request_id=request.state.request_id,
+        tenant_id=tenant_id,
+        action="profile.delete",
+        idempotency_key=idem,
+        before=None,
+        after={
+            "deleted": True,
+            "deleted_at": deleted_at,
+            "reason_sha256": hashlib.sha256(body.reason.encode("utf-8")).hexdigest(),
+        },
+        evidence_refs=[],
+        rule_ids=["USER-PERMANENT-DELETE"],
+        actor="api",
+    ))
+    db.add(IdempotencyRecord(
+        tenant_id=tenant_id,
+        idempotency_key=idem,
+        resource_key=_resource_key(tenant_id, user_id),
+        request_hash=_request_hash(request, body),
+        status_code=200,
+        response_body=response,
+    ))
+    db.commit()
     return response
 
 
@@ -466,12 +559,15 @@ def capabilities(request: Request, tenant_id: str = Depends(auth_context), db: S
             "profile_explanations": True,
             "explicit_corrections": True,
             "forget_requests": True,
+            "permanent_profile_delete": True,
             "enneagram_requires_explicit_source": True,
             "profile_reset": settings.profile_reset_active,
         },
         "limits": {
             "requests_per_minute": settings.rate_limit_per_minute,
-            "message_characters": 4000,
+            "message_characters": 10000,
+            "demo_message_characters": 4000,
             "recent_turns": 12,
+            "idempotency_ttl_hours": settings.idempotency_ttl_hours,
         },
     }

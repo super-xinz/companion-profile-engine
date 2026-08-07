@@ -87,6 +87,21 @@
       }
     },
     {
+      "name": "Permanently delete profile",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "X-API-Key", "value": "{{profileApiKey}}", "type": "text" },
+          { "key": "X-Tenant-ID", "value": "{{tenantId}}" },
+          { "key": "Idempotency-Key", "value": "delete-{{userId}}-manual" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"expected_profile_version\": {{profileVersion}},\n  \"confirm\": true,\n  \"reason\": \"user requested permanent deletion\"\n}" },
+        "url": "{{profileBaseUrl}}/v1/profiles/{{userId}}:delete",
+        "description": "永久删除用户画像及关联数据。操作前请先读取最新 profile_version；不可恢复。"
+      }
+    },
+    {
       "name": "HIWM aggregate health",
       "request": { "method": "GET", "url": "{{chatBaseUrl}}/api/health" }
     },

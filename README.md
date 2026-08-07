@@ -119,6 +119,7 @@ PROFILE_DEMO_RATE_LIMIT_PER_MINUTE=120
 PROFILE_DEMO_MODEL_RATE_LIMIT_PER_MINUTE=30
 PROFILE_AUTH_FAILURE_RATE_LIMIT_PER_MINUTE=30
 PROFILE_MAX_REQUEST_BODY_BYTES=2500000
+PROFILE_IDEMPOTENCY_TTL_HOURS=24
 ```
 
 所有可选模型均通过 OpenRouter 调用。工作台顶部可随时切换，模型共用服务器端 `PROFILE_OPENROUTER_API_KEY`，密钥不会下发浏览器。核心消息 API 可通过 `model_provider=deepseek|claude|gpt|glm|gemini|kimi` 按请求选择。若不使用外部模型服务，请将 `PROFILE_SEMANTIC_EXTRACTOR` 设为 `deterministic`。
@@ -144,6 +145,7 @@ docker compose up --build
 | `POST` | `/v1/profiles/{user_id}:correct` | 人工更正画像或事实 |
 | `POST` | `/v1/profiles/{user_id}:set-enneagram` | 设置或替换已确认的九型人格结构 |
 | `POST` | `/v1/profiles/{user_id}:forget` | 遗忘记忆、证据或关闭画像 |
+| `POST` | `/v1/profiles/{user_id}:delete` | 永久删除人物及其全部画像、对话和敏感缓存 |
 | `GET` | `/v1/rule-packs/current` | 查看当前已发布规则包 |
 
 写操作需要租户凭据、幂等键和正确的画像版本；版本冲突时服务返回 HTTP 409。

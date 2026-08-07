@@ -3,10 +3,14 @@ from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
-from profile_engine.api import SlidingWindowRateLimiter, app
+from profile_engine.api import SlidingWindowRateLimiter, _resource_key, app
 from profile_engine.config import Settings
+from profile_engine.db import SessionLocal
 from profile_engine.model_catalog import MODEL_PROVIDERS
+from profile_engine.models import (AuditLog, CurrentState, IdempotencyRecord,
+                                   ManualOverride, RuntimePreference, User)
 
 
 HEADERS = {"X-API-Key": "local-development-key", "X-Tenant-ID": "test-tenant"}
@@ -22,9 +26,13 @@ def test_b2b_capabilities_security_headers_and_api_key_challenge():
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["api_version"] == "v1"
-        assert body["service_version"] == "0.6.0"
+        assert body["service_version"] == "0.7.0"
         assert [item["provider"] for item in body["model_config"]["options"]] == list(MODEL_PROVIDERS)
         assert body["limits"]["requests_per_minute"] >= 1
+        assert body["limits"]["message_characters"] == 10000
+        assert body["limits"]["demo_message_characters"] == 4000
+        assert body["limits"]["idempotency_ttl_hours"] >= 1
+        assert body["features"]["permanent_profile_delete"] is True
         assert response.headers["x-api-version"] == "1"
         assert response.headers["x-ratelimit-limit"]
         assert response.headers["cache-control"] == "no-store"
@@ -260,6 +268,120 @@ def test_consent_and_forget_birth_inference():
         assert profile["birth_analysis"]["numerology_code"] is None
         assert profile["digital_code_profile"]["status"] == "unassigned"
         assert profile["core_traits"]["energy_mode"]["extroversion"]["value"] == 0.5
+
+
+def test_all_profile_forget_clears_runtime_values_and_disables_inference():
+    user = f"forget-all-{uuid.uuid4().hex}"
+    with TestClient(app) as client:
+        initialized = client.post("/v1/profiles:init", headers=idem(f"init-{user}"), json={
+            "tenant_user_id": user,
+            "birth_date": "1998-12-06",
+            "consent": {"profile": True, "sensitive_inference": True},
+        })
+        assert initialized.status_code == 200, initialized.text
+        preference = client.post(
+            f"/v1/profiles/{user}/messages:ingest",
+            headers=idem(f"preference-{user}"),
+            json={
+                "conversation_id": "privacy",
+                "message_id": "privacy-1",
+                "expected_profile_version": 1,
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "text": "以后回答短一点。",
+            },
+        )
+        assert preference.status_code == 200, preference.text
+        forgotten = client.post(f"/v1/profiles/{user}:forget", headers=idem(f"all-{user}"), json={
+            "expected_profile_version": preference.json()["profile_version"],
+            "scope": "all_profile",
+            "reason": "用户关闭全部画像",
+        })
+        assert forgotten.status_code == 200, forgotten.text
+        current = client.get(f"/v1/profiles/{user}", headers=HEADERS)
+        assert current.status_code == 200
+        profile = current.json()["profile"]
+        assert profile["runtime"] == {
+            "interaction_preferences": {}, "current_state": {}, "memories": [],
+        }
+        assert all(
+            entry["value"] == 0.5 and entry["confidence"] == 0.1 and not entry["evidence_refs"]
+            for category in profile["core_traits"].values()
+            for entry in category.values()
+        )
+        denied = client.post(
+            f"/v1/profiles/{user}/messages:ingest",
+            headers=idem(f"denied-{user}"),
+            json={
+                "conversation_id": "privacy",
+                "message_id": "privacy-2",
+                "expected_profile_version": forgotten.json()["profile_version"],
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "text": "这条消息不应再触发画像推断。",
+            },
+        )
+        assert denied.status_code == 403
+    with SessionLocal() as db:
+        stored = db.scalar(select(User).where(
+            User.tenant_id == HEADERS["X-Tenant-ID"], User.tenant_user_id == user,
+        ))
+        assert stored is not None
+        assert stored.profile_consent is False
+        assert stored.sensitive_inference_consent is False
+        assert stored.inference_enabled is False
+        assert not db.scalars(select(RuntimePreference).where(RuntimePreference.user_id == stored.id)).all()
+        assert not db.scalars(select(CurrentState).where(CurrentState.user_id == stored.id)).all()
+        assert not db.scalars(select(ManualOverride).where(ManualOverride.user_id == stored.id)).all()
+
+
+def test_permanent_delete_is_atomic_idempotent_and_allows_reinitialization():
+    user = f"delete-{uuid.uuid4().hex}"
+    delete_key = f"delete-{user}"
+    with TestClient(app) as client:
+        initialized = client.post("/v1/profiles:init", headers=idem(f"init-{user}"), json={
+            "tenant_user_id": user,
+            "display_name": "应被永久删除的人物",
+            "consent": {"profile": True, "sensitive_inference": False},
+        })
+        assert initialized.status_code == 200, initialized.text
+        deleted = client.post(f"/v1/profiles/{user}:delete", headers=idem(delete_key), json={
+            "expected_profile_version": 1,
+            "confirm": True,
+            "reason": "用户要求永久删除",
+        })
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json()["deleted"] is True
+        assert "user_id" not in deleted.json()
+        missing = client.get(f"/v1/profiles/{user}", headers=HEADERS)
+        assert missing.status_code == 404
+        retried = client.post(f"/v1/profiles/{user}:delete", headers=idem(delete_key), json={
+            "expected_profile_version": 1,
+            "confirm": True,
+            "reason": "用户要求永久删除",
+        })
+        assert retried.json() == deleted.json()
+        recreated = client.post("/v1/profiles:init", headers=idem(f"reinit-{user}"), json={
+            "tenant_user_id": user,
+            "consent": {"profile": True, "sensitive_inference": False},
+        })
+        assert recreated.status_code == 200, recreated.text
+    with SessionLocal() as db:
+        delete_cache = db.scalar(select(IdempotencyRecord).where(
+            IdempotencyRecord.tenant_id == HEADERS["X-Tenant-ID"],
+            IdempotencyRecord.idempotency_key == delete_key,
+        ))
+        assert delete_cache is not None
+        assert delete_cache.resource_key == _resource_key(HEADERS["X-Tenant-ID"], user)
+        assert "应被永久删除的人物" not in str(delete_cache.response_body)
+        tombstone = db.scalar(select(AuditLog).where(
+            AuditLog.tenant_id == HEADERS["X-Tenant-ID"],
+            AuditLog.action == "profile.delete",
+            AuditLog.idempotency_key == delete_key,
+        ))
+        assert tombstone is not None
+        assert tombstone.user_id is None
+        assert tombstone.before is None
+        assert tombstone.after["reason_sha256"]
+        assert "用户要求永久删除" not in str(tombstone.after)
 
 
 def test_reset_profile_is_confirmed_idempotent_and_recreates_blank_profile():

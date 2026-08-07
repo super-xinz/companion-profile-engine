@@ -37,6 +37,7 @@
 | `PROFILE_DEMO_MODEL_RATE_LIMIT_PER_MINUTE=30` | 是 | 否 | 网站模型调用每来源地址每分钟上限 |
 | `PROFILE_AUTH_FAILURE_RATE_LIMIT_PER_MINUTE=30` | 是 | 否 | API 鉴权失败的来源地址限流 |
 | `PROFILE_MAX_REQUEST_BODY_BYTES=2500000` | 是 | 否 | 最大请求体，防止超大载荷耗尽资源 |
+| `PROFILE_IDEMPOTENCY_TTL_HOURS=24` | 是 | 否 | 幂等响应缓存保留小时数，范围 1–168 |
 | `PROFILE_SEMANTIC_EXTRACTOR=model` | 是 | 否 | 外部模型语义抽取 |
 | `PROFILE_DEFAULT_MODEL_PROVIDER=deepseek` | 是 | 否 | 默认模型，可选 `deepseek` / `claude` / `gpt` / `glm` / `gemini` / `kimi` |
 | `PROFILE_OPENROUTER_API_KEY` | 是 | 是 | 所有模型共用的 OpenRouter 密钥 |
@@ -61,7 +62,7 @@
 4. 用有效 Key 初始化、读取、摄取、读取新版本、重置均成功。
 5. PostgreSQL/Service 重启后画像仍存在。
 6. 日志只包含 request_id、path、状态和耗时，不含 Key/Header/完整画像。
-7. `GET /v1/capabilities` 返回服务 0.6.0、API v1、Schema、规则包与可选模型配置。
+7. `GET /v1/capabilities` 返回服务 0.7.0、API v1、Schema、规则包与可选模型配置。
 8. 客户生产环境的 `/demo`、`/rules`、`/docs` 与 `:reset` 均不可访问。
 
 ## 更新与回滚

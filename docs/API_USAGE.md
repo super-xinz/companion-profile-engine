@@ -106,7 +106,7 @@ TENANT_ID=test-tenant
 `GET /health`，无需鉴权。返回应用、数据库和版本，不返回密钥或画像。
 
 ```json
-{"status":"ok","service":"companion-profile-engine","version":"0.2.0","services":{"application":"ok","database":"ok"}}
+{"status":"ok","service":"companion-profile-engine","version":"0.7.0","services":{"application":"ok","database":"ok"}}
 ```
 
 ### 初始化画像
@@ -184,11 +184,21 @@ curl "$BASE_URL/v1/profiles/demo-xu" -H "X-API-Key: $API_KEY" -H "X-Tenant-ID: $
 
 `POST /v1/profiles/{user_id}:forget`。`scope` 为 `memory`、`evidence`、`birth_inference`、`enneagram` 或 `all_profile`；前两者必须给 `target_id`。
 
-`all_profile` 会关闭该人物的后续画像推断；已关闭或撤回画像授权的人物不会继续出现在网站工作台的可聊天人物列表中。
+`all_profile` 会撤回画像授权、关闭后续推断、清空运行时状态与偏好，并把当前连续画像恢复为中性值；该人物不会继续出现在网站工作台的可聊天列表中。历史版本用于受控审计，不等同于永久删除。
 
 ```json
 {"expected_profile_version":3,"scope":"memory","target_id":"mem_xxx","reason":"用户要求删除"}
 ```
+
+### 永久删除人物
+
+`POST /v1/profiles/{user_id}:delete` 会永久删除该人物的画像版本、证据、记忆、状态、对话、人工覆盖、旧审计快照和人物级幂等缓存。成功后读取人物返回 404；仅保留不含人物内容的删除凭证和本次幂等结果。
+
+```json
+{"expected_profile_version":3,"confirm":true,"reason":"用户要求永久删除全部数据"}
+```
+
+幂等结果默认保留 24 小时，可通过 `PROFILE_IDEMPOTENCY_TTL_HOURS` 调整为 1–168 小时。
 
 ### 重置 Demo 测试用户（本次新增）
 
@@ -217,7 +227,7 @@ curl -X POST "$BASE_URL/v1/profiles/demo-xu:reset" \
 | 方法 | 路径 | 功能 |
 | --- | --- | --- |
 | POST | `/start` | 新建随机 Demo 人物与会话 |
-| POST | `/chat` | 内置画像聊天（可选择 DeepSeek V3.2 或 Claude） |
+| POST | `/chat` | 内置画像聊天（可选择 DeepSeek、Claude、GPT、GLM、Gemini 或 Kimi） |
 | POST | `/workspace/bootstrap` | 初始化团队与模板人物 |
 | GET/POST | `/people` | 列表/创建人物 |
 | GET | `/people/{user_id}` | 人物详情 |
@@ -233,7 +243,7 @@ curl -X POST "$BASE_URL/v1/profiles/demo-xu:reset" \
 | POST/PUT | `/rules/drafts`、`/rules/drafts/{revision_id}` | 草稿创建/保存 |
 | POST | `/rules/revisions/{id}/submit|approve|publish|rollback` | 审批发布流 |
 | GET | `/rules/compare` | 修订比较 |
-| POST | `/rules/test` | 隔离规则测试 |
+| POST | `/rules/test` | 隔离规则测试；可选 `model_provider`，同一份语义结果对比新旧规则 |
 | POST | `/members` | 团队成员管理 |
 
 请求细节以 `/openapi.json` 为最终机器可读来源。

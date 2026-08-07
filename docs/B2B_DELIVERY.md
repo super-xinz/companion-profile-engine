@@ -33,7 +33,7 @@ API Key 只能保存在客户服务端，不能进入网页、App 包、日志�
 4. 调用 `POST /v1/profiles/{user_id}/messages:ingest`，传用户消息、当前版本和必要的最近轮次。
 5. 使用返回的 `reply_hints`、新版画像必要字段和用户消息调用客户自己的语言模型 API。
 6. `409` 时重新读取画像版本并最多重试一次；`429` 遵循 `Retry-After`；`503` 使用相同幂等键有限退避重试。
-7. 用户更正或删除数据时使用 `:correct`、`:forget`，不要直接操作画像数据库。
+7. 用户更正、局部遗忘或永久删除数据时使用 `:correct`、`:forget`、`:delete`，不要直接操作画像数据库。
 
 所有写请求必须提供唯一 `Idempotency-Key`。同一逻辑请求重试时保持不变，不同请求绝不能复用。
 
@@ -63,6 +63,7 @@ PROFILE_DEMO_RATE_LIMIT_PER_MINUTE=120
 PROFILE_DEMO_MODEL_RATE_LIMIT_PER_MINUTE=30
 PROFILE_AUTH_FAILURE_RATE_LIMIT_PER_MINUTE=30
 PROFILE_MAX_REQUEST_BODY_BYTES=2500000
+PROFILE_IDEMPOTENCY_TTL_HOURS=24
 ```
 
 团队验收环境可以把三个功能开关设置为 `true`，但必须配置强 `PROFILE_DEMO_ACCESS_CODE`，并且不得使用客户生产数据库。
@@ -73,6 +74,7 @@ PROFILE_MAX_REQUEST_BODY_BYTES=2500000
 - 生产配置启动前 fail-closed 校验；
 - 乐观版本控制避免并发覆盖；
 - 幂等记录避免网络重试重复更新；
+- 幂等记录仅保留有限时间并使用人物资源指纹归属，永久删除时同步清除旧缓存；
 - 模型只能给候选，硬规则决定是否写入画像；
 - 人工更正、遗忘、证据、规则版本和前后快照进入审计；
 - 每租户基础限流，返回剩余额度与重试时间；

@@ -8,11 +8,45 @@ from profile_engine.api import app
 from profile_engine.db import SessionLocal
 from profile_engine.demo import demo_auth
 from profile_engine.models import ProfileVersion, User
+from profile_engine.schemas import ReplyGuidance, SemanticAnalysis
 from profile_engine.workspace import _actor
 
 
 def test_caller_controlled_actor_header_cannot_impersonate_workspace_members():
     assert _actor("任意伪造管理员") == "系统管理员"
+
+
+def test_rule_comparison_runs_semantic_analysis_once(monkeypatch):
+    tenant = f"rules-model-{uuid.uuid4().hex}"
+    calls = {"factory": 0, "analyze": 0, "provider": None}
+
+    class CountingExtractor:
+        version = "counting-extractor-v1"
+
+        def analyze(self, *_args, **_kwargs):
+            calls["analyze"] += 1
+            return SemanticAnalysis(reply_guidance=ReplyGuidance())
+
+    def factory(provider=None):
+        calls["factory"] += 1
+        calls["provider"] = provider
+        return CountingExtractor()
+
+    monkeypatch.setattr("profile_engine.workspace.get_semantic_extractor", factory)
+    app.dependency_overrides[demo_auth] = lambda: tenant
+    try:
+        with TestClient(app) as client:
+            response = client.post("/demo/api/rules/test", json={
+                "text": "我通常会先自己梳理，再和团队讨论。",
+                "model_provider": "deepseek",
+            })
+            assert response.status_code == 200, response.text
+            assert response.json()["production_profile_unchanged"] is True
+            assert response.json()["production"]["extractor_version"] == "counting-extractor-v1"
+            assert response.json()["candidate"]["extractor_version"] == "counting-extractor-v1"
+            assert calls == {"factory": 1, "analyze": 1, "provider": "deepseek"}
+    finally:
+        app.dependency_overrides.pop(demo_auth, None)
 
 
 def test_multi_person_profile_and_rule_workspaces():

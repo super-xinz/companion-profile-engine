@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from .db import get_db
 from .demo import _current_pack, demo_auth
 from .extractor import get_semantic_extractor
+from .model_catalog import ModelProvider
 from .models import (AuditLog, ChatMessage, Conversation, ManualOverride, Memory,
                      ProfileEvidence, ProfileVersion, RulePack, RuleRevision,
                      TeamMember, User)
@@ -125,6 +126,7 @@ class RuleTestRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     revision_id: str | None = None
     user_id: str | None = None
+    model_provider: ModelProvider | None = None
 
 
 class TeamMemberRequest(BaseModel):
@@ -920,16 +922,17 @@ def compare_rules(left: str, right: str, tenant_id: str = Depends(demo_auth),
             "change_count": len(changes)}
 
 
-def _simulate(text: str, canonical: dict, profile: dict | None = None) -> dict:
+def _simulation_catalog(canonical: dict, profile: dict | None = None) -> dict:
     if profile:
         traits = flattened_traits(profile)
-        catalog = {key: {"label": TRAIT_NAMES.get(key, key), "current_value": item["value"],
-                         "current_confidence": item["confidence"]} for key, item in traits.items()}
-    else:
-        categories = canonical.get("schema", {}).get("canonical_profile", {}).get("core_traits", {}).get("categories", {})
-        catalog = {key: {"label": TRAIT_NAMES.get(key, key), "current_value": .5, "current_confidence": .1}
-                   for category in categories.values() for key in category.get("fields", {})}
-    analysis = get_semantic_extractor().analyze(text, trait_catalog=catalog, recent_turns=[])
+        return {key: {"label": TRAIT_NAMES.get(key, key), "current_value": item["value"],
+                      "current_confidence": item["confidence"]} for key, item in traits.items()}
+    categories = canonical.get("schema", {}).get("canonical_profile", {}).get("core_traits", {}).get("categories", {})
+    return {key: {"label": TRAIT_NAMES.get(key, key), "current_value": .5, "current_confidence": .1}
+            for category in categories.values() for key in category.get("fields", {})}
+
+
+def _simulate(canonical: dict, catalog: dict, analysis, extractor_version: str) -> dict:
     mappings = canonical.get("dialogue", {}).get("trait_mapping_rules", {})
     changes, hits = [], []
     for signal in analysis.trait_signals:
@@ -947,7 +950,7 @@ def _simulate(text: str, canonical: dict, profile: dict | None = None) -> dict:
         "rule_hits": hits,
         "profile_changes": changes,
         "reply_strategy": guidance,
-        "extractor_version": get_semantic_extractor().version,
+        "extractor_version": extractor_version,
     }
 
 
@@ -960,8 +963,11 @@ def test_rules(body: RuleTestRequest, request: Request, tenant_id: str = Depends
         raise HTTPException(status_code=404, detail="测试规则版本不存在")
     profile = get_profile(db, tenant_id, body.user_id)["profile"] if body.user_id else None
     before_versions = db.scalar(select(func.count()).select_from(ProfileVersion))
-    old_result = _simulate(body.text, current.canonical_json, profile)
-    candidate_result = _simulate(body.text, candidate.canonical_json, profile)
+    catalog = _simulation_catalog(current.canonical_json, profile)
+    extractor = get_semantic_extractor(body.model_provider)
+    analysis = extractor.analyze(body.text, trait_catalog=catalog, recent_turns=[])
+    old_result = _simulate(current.canonical_json, catalog, analysis, extractor.version)
+    candidate_result = _simulate(candidate.canonical_json, catalog, analysis, extractor.version)
     after_versions = db.scalar(select(func.count()).select_from(ProfileVersion))
     return {
         "isolated": True,
