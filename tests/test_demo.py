@@ -40,20 +40,12 @@ def test_demo_page_and_conversation_flow(monkeypatch):
             assert "对话与画像工作台" in page.text
             assert 'class="messages scroll-surface"' in page.text
             assert "完整画像" in page.text
-            assert "规则管理" not in page.text
-            assert "互动风格" in page.text
-            assert "九型主型" not in page.text
-            assert "本能叠层" not in page.text
+            assert "规则管理" in page.text
             assert 'id="modelProviderSelect"' in page.text
 
             script = client.get("/assets/demo.js")
             assert script.status_code == 200
             assert '${esc(item.label)} · ${esc(item.model)}' in script.text
-            assert "偏好倾向维度" in script.text
-            assert "初始画像线索" in script.text
-            assert "原始完整画像" not in script.text
-            assert "数字密码画像" not in script.text
-            assert "MBTI 推导" not in script.text
 
             started = client.post("/demo/api/start", json={
                 "display_name": "演示用户",

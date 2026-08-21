@@ -1,6 +1,6 @@
 # 共鸣画像引擎
 
-本次双项目协同进化的交付入口：[B 端接入包](integration/b2b/README.md)、[系统使用与交付说明](docs/SYSTEM_USAGE_AND_DELIVERY.md)、[API 使用文档](docs/API_USAGE.md)、[B 端交付方案](docs/B2B_DELIVERY.md)、[Zeabur 部署](docs/DEPLOYMENT_ZEABUR.md)、[实施报告](IMPLEMENTATION_REPORT.md) 与 [Postman Collection](postman/companion-profile-engine.postman_collection.json)。
+本次双项目协同进化的交付入口：[系统使用与交付说明](docs/SYSTEM_USAGE_AND_DELIVERY.md)、[API 使用文档](docs/API_USAGE.md)、[B 端交付方案](docs/B2B_DELIVERY.md)、[Zeabur 部署](docs/DEPLOYMENT_ZEABUR.md)、[实施报告](IMPLEMENTATION_REPORT.md) 与 [Postman Collection](postman/companion-profile-engine.postman_collection.json)。
 
 面向陪伴机器人与心理／学习专家协作的多人画像管理平台。系统将规则、人物、长期画像、证据、对话和人工修正统一管理；模型只能提出候选，只有通过规则校验的内容才会进入画像。
 
@@ -112,7 +112,6 @@ PROFILE_GEMINI_MODEL=google/gemini-3.1-pro-preview
 PROFILE_KIMI_MODEL=moonshotai/kimi-k3
 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true
 PROFILE_DEMO_FEATURES_ENABLED=false
-PROFILE_RULE_WORKBENCH_ENABLED=false
 PROFILE_API_DOCS_ENABLED=false
 PROFILE_ALLOW_PROFILE_RESET=false
 PROFILE_RATE_LIMIT_PER_MINUTE=120

@@ -30,7 +30,6 @@
 | `PROFILE_DEMO_TENANT_ID=demo-tenant` | 是 | 否 | 与 HIWM 一致 |
 | `PROFILE_DEMO_ACCESS_CODE` | 公开工作台时 | 是 | `/demo` 与 `/rules` 口令 |
 | `PROFILE_DEMO_FEATURES_ENABLED` | 是 | 否 | 团队演示为 `true`；客户生产为 `false` |
-| `PROFILE_RULE_WORKBENCH_ENABLED=false` | 是 | 否 | 对外环境保持关闭；仅内部专家环境单独开启 |
 | `PROFILE_API_DOCS_ENABLED` | 是 | 否 | 团队验收可开启；客户生产默认关闭 |
 | `PROFILE_ALLOW_PROFILE_RESET` | 是 | 否 | 仅测试环境允许 |
 | `PROFILE_RATE_LIMIT_PER_MINUTE` | 是 | 否 | 单副本租户级基础限流 |

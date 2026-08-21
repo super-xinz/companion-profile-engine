@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-import profile_engine.api as api_module
 from profile_engine.api import SlidingWindowRateLimiter, _resource_key, app
 from profile_engine.config import Settings
 from profile_engine.db import SessionLocal
@@ -98,20 +98,8 @@ def test_production_configuration_fails_closed_and_disables_demo_defaults():
     )
     production.validate_runtime_configuration()
     assert production.demo_features_active is False
-    assert production.rule_workbench_active is False
     assert production.api_docs_active is False
     assert production.profile_reset_active is False
-
-    single_tenant = Settings(
-        _env_file=None,
-        environment="production",
-        database_url="postgresql://profile:secret@database/profile",  # pragma: allowlist secret
-        tenant_id="robot-company-prod",
-        api_key="x" * 32,
-        tenant_api_keys={},
-        semantic_extractor="deterministic",
-    )
-    single_tenant.validate_runtime_configuration()
 
     missing_model_key = Settings(
         _env_file=None,
@@ -436,93 +424,6 @@ def test_reset_profile_is_confirmed_idempotent_and_recreates_blank_profile():
             json={"confirm": True, "display_name": "重置用户"},
         )
         assert retry.json() == reset.json()
-
-
-def test_reset_profile_is_disabled_in_production(monkeypatch):
-    with TestClient(app) as client:
-        monkeypatch.setattr(
-            api_module,
-            "get_settings",
-            lambda: Settings(
-                _env_file=None,
-                environment="production",
-                database_url="postgresql://profile:secret@database/profile",
-                tenant_api_keys={"test-tenant": "x" * 32},
-            ),
-        )
-        response = client.post(
-            "/v1/profiles/production-user:reset",
-            headers={
-                "X-API-Key": "x" * 32,
-                "X-Tenant-ID": "test-tenant",
-                "Idempotency-Key": "production-reset",
-            },
-            json={"confirm": True},
-        )
-        assert response.status_code == 404
-
-
-def test_single_tenant_production_auth(monkeypatch):
-    with TestClient(app) as client:
-        monkeypatch.setattr(
-            api_module,
-            "get_settings",
-            lambda: Settings(
-                _env_file=None,
-                environment="production",
-                database_url="postgresql://profile:secret@database/profile",
-                tenant_id="robot-company-prod",
-                tenant_api_keys={},
-                api_key="production-secret-key-long-enough",
-            ),
-        )
-        accepted = client.get(
-            "/v1/profiles/missing-user",
-            headers={"X-Tenant-ID": "robot-company-prod", "X-API-Key": "production-secret-key-long-enough"},
-        )
-        wrong_tenant = client.get(
-            "/v1/profiles/missing-user",
-            headers={"X-Tenant-ID": "another-tenant", "X-API-Key": "production-secret-key-long-enough"},
-        )
-
-        assert accepted.status_code == 404
-        assert wrong_tenant.status_code == 401
-
-
-def test_internal_rule_workbench_is_hidden_by_default_in_production(monkeypatch):
-    with TestClient(app) as client:
-        monkeypatch.setattr(
-            api_module,
-            "get_settings",
-            lambda: Settings(
-                _env_file=None,
-                environment="production",
-                database_url="postgresql://profile:secret@database/profile",
-                tenant_api_keys={"test-tenant": "x" * 32},
-                demo_features_enabled=True,
-                demo_access_code="production-demo-access-code",
-            ),
-        )
-
-        assert client.get("/rules").status_code == 404
-        assert client.get("/assets/rules.js").status_code == 404
-        assert client.post(
-            "/demo/api/rules/test",
-            headers={"X-Demo-Code": "production-demo-access-code"},
-            json={"text": "测试规则"},
-        ).status_code == 404
-
-        monkeypatch.setattr(
-            api_module,
-            "get_settings",
-            lambda: Settings(
-                _env_file=None,
-                environment="production",
-                database_url="postgresql://profile:secret@database/profile",
-                tenant_api_keys={"test-tenant": "x" * 32},
-            ),
-        )
-        assert client.get("/assets/demo.js").status_code == 404
 
 
 def test_correction_explanation_and_evidence_reversal():

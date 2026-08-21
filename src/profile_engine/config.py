@@ -22,7 +22,6 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///./data/profile_engine.db"
     api_key: str = "local-development-key"
-    tenant_id: str | None = None
     tenant_api_keys: dict[str, str] = Field(default_factory=dict)
     rule_source_dir: Path = Path("./rules")
     environment: str = "development"
@@ -45,7 +44,6 @@ class Settings(BaseSettings):
     demo_access_code: str | None = None
     demo_tenant_id: str = "demo-tenant"
     demo_features_enabled: bool | None = None
-    rule_workbench_enabled: bool | None = None
     api_docs_enabled: bool | None = None
     allow_profile_reset: bool | None = None
     rate_limit_per_minute: int = Field(default=120, ge=1, le=10_000)
@@ -93,12 +91,6 @@ class Settings(BaseSettings):
         return not self.is_production
 
     @property
-    def rule_workbench_active(self) -> bool:
-        if self.rule_workbench_enabled is not None:
-            return self.rule_workbench_enabled
-        return not self.is_production
-
-    @property
     def profile_reset_active(self) -> bool:
         if self.allow_profile_reset is not None:
             return self.allow_profile_reset
@@ -124,12 +116,8 @@ class Settings(BaseSettings):
         if self.is_production:
             if not self.database_url.startswith("postgresql+psycopg://"):
                 errors.append("生产环境必须使用 PostgreSQL，禁止使用容器内 SQLite")
-            single_tenant_configured = bool(self.tenant_id and len(self.api_key) >= 24)
-            if not self.tenant_api_keys and not single_tenant_configured:
-                errors.append(
-                    "生产环境必须配置 PROFILE_TENANT_API_KEYS，或同时配置 "
-                    "PROFILE_TENANT_ID 与至少 24 字符的 PROFILE_API_KEY"
-                )
+            if not self.tenant_api_keys:
+                errors.append("生产环境必须配置 PROFILE_TENANT_API_KEYS")
             weak_tenants = sorted(
                 tenant for tenant, key in self.tenant_api_keys.items()
                 if not tenant.strip() or len(key) < 24
