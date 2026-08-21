@@ -405,7 +405,7 @@ def chat(
     idem: str = Depends(idempotency_key),
     db: Session = Depends(get_db),
 ) -> dict:
-    cached = _cached(db, tenant_id, idem, request, body)
+    cached = _cached(db, tenant_id, idem, body.user_id, request, body)
     if cached:
         return cached
 
@@ -473,7 +473,7 @@ def chat(
                 body, engine, assistant_message.content, responder,
                 profile_created=profile_created,
             )
-            _cache(db, tenant_id, idem, request, body, response)
+            _cache(db, tenant_id, idem, body.user_id, request, body, response)
             return response
     else:
         current = get_profile(db, tenant_id, body.user_id)
@@ -570,7 +570,7 @@ def chat(
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
     response = _chat_response(body, engine, reply, responder, profile_created=profile_created)
-    _cache(db, tenant_id, idem, request, body, response)
+    _cache(db, tenant_id, idem, body.user_id, request, body, response)
     return response
 
 

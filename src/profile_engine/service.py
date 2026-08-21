@@ -1440,6 +1440,9 @@ def forget_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Forge
         profile, _ = build_initial_profile(
             user.id, None, None, None, pack.canonical_json, {}, None, {},
         )
+        for category in profile["core_traits"].values():
+            for entry in category.values():
+                entry.update(value=0.5, confidence=0.1, evidence_refs=[])
         profile["meta"]["warnings"] = ["画像内容已清除；画像推断和敏感参考模型均已关闭。"]
         profile["meta"]["inference_policies"] = {
             "birth_prior_enabled": False,
