@@ -1,6 +1,6 @@
 # Companion Profile Engine API 使用文档
 
-本文依据 2026-08-01 的真实 FastAPI 路由与 Pydantic Schema 编写。交互式 OpenAPI 位于 `/docs`，Schema 位于 `/openapi.json`。
+本文依据 2026-08-21 的真实 FastAPI 路由与 Pydantic Schema 编写。开发环境可使用 `/docs` 与 `/openapi.json`；生产环境强制关闭在线文档，应使用审核后的离线交付件。
 
 ## 1. API 简介与 Chatbot 时序
 
@@ -32,9 +32,9 @@ sequenceDiagram
 
 画像引擎只摄取用户表达；`assistant_message` 不属于当前摄取 Schema。BFF 可把最近 user/assistant 历史映射到 `context.recent_turns`。`turn_id` 应同时映射为 `message_id` 和 `Idempotency-Key`，防止网络重试导致重复更新。
 
-仓库内 `/demo` 页面就是上述编排的可运行 Demo：其后端 `/demo/api/chat` 先调用画像引擎，再读取更新后的画像和回答策略，最后调用界面所选的 DeepSeek、Claude、GPT、GLM、Gemini 或 Kimi 生成回复。所有模型均经 OpenRouter，浏览器不会直接持有画像 API Key 或模型 API Key。
+仓库内 `/demo` 页面就是上述编排的可运行示例：后端先更新画像，再使用服务器固定的回答配置生成回复。浏览器不能选择或获知具体供应商，也不会持有画像 API Key 或回答服务 API Key。
 
-模型网络请求失败或 OpenRouter 返回 4xx/5xx 时，`/demo/api/chat` 返回 `502` 和 `code=model_no_response`，并在 `details` 中提供具体模型 ID、上游 HTTP 状态及画像版本。系统不会生成、展示或保存兜底助手回复。
+回答服务暂时不可用时，`/demo/api/chat` 返回 `502` 和 `code=assistant_temporarily_unavailable`。公开响应只包含中性提示与已经保存的画像版本，不下发供应商、具体模型、上游错误或内部执行轨迹。
 
 ## 2. 启动
 
@@ -220,33 +220,20 @@ curl -X POST "$BASE_URL/v1/profiles/demo-xu:reset" \
 
 `GET /v1/capabilities` 返回服务版本、API v1、画像 Schema、当前规则包、功能开关和调用限制。B 端服务应在启动及部署切换后读取一次并记录版本，避免只根据网页或人工配置判断兼容性。
 
-## 5. Demo 与专家工作台真实路由
+## 5. 公开 Demo 路由
 
 以下均以 `/demo/api` 开头并要求 `X-Demo-Code`；它们服务于仓库内置页面，不是 Chat BFF 的核心依赖。
 
 | 方法 | 路径 | 功能 |
 | --- | --- | --- |
-| POST | `/start` | 新建随机 Demo 人物与会话 |
-| POST | `/chat` | 内置画像聊天（可选择 DeepSeek、Claude、GPT、GLM、Gemini 或 Kimi） |
-| POST | `/workspace/bootstrap` | 初始化团队与模板人物 |
-| GET/POST | `/people` | 列表/创建人物 |
-| GET | `/people/{user_id}` | 人物详情 |
-| POST/GET | `/people/{user_id}/conversations` | 创建/列出会话 |
-| GET | `/people/{user_id}/conversations/{conversation_id}/messages` | 消息列表 |
-| GET | `/people/{user_id}/profile-explain` | 工作台解释与审计 |
-| POST | `/people/{user_id}/manual-edit` | 专家人工编辑 |
-| POST | `/people/{user_id}/enneagram` | 专家九型编辑 |
-| GET | `/rules/workspace` | 规则工作区 |
-| GET | `/rules/revisions/{revision_id}` | 修订详情 |
-| GET | `/rules/revisions/{revision_id}/documents/{asset}` | 规则文档 |
-| POST | `/rules/documents/parse`、`/dump` | 文档/结构转换 |
-| POST/PUT | `/rules/drafts`、`/rules/drafts/{revision_id}` | 草稿创建/保存 |
-| POST | `/rules/revisions/{id}/submit|approve|publish|rollback` | 审批发布流 |
-| GET | `/rules/compare` | 修订比较 |
-| POST | `/rules/test` | 隔离规则测试；可选 `model_provider`，同一份语义结果对比新旧规则 |
-| POST | `/members` | 团队成员管理 |
+| POST | `/workspace/bootstrap` | 准备并返回五个中性案例 |
+| GET | `/people` | 返回五个案例的公开摘要 |
+| GET | `/people/{public_id}` | 返回公开指标、沟通偏好和会话列表 |
+| POST/GET | `/people/{public_id}/conversations` | 创建/列出案例会话 |
+| GET | `/people/{public_id}/conversations/{conversation_id}/messages` | 返回不含执行轨迹的消息列表 |
+| POST | `/chat` | 生成回复；成功响应不含供应商、模型或内部轨迹 |
 
-请求细节以 `/openapi.json` 为最终机器可读来源。
+其他旧工作台、人物编辑、解释、规则和成员管理路径均返回 404；生产 `/openapi.json` 强制关闭。B 端只应依赖 `/v1/*`。
 
 ## 6. 关键数据模型
 
@@ -311,7 +298,7 @@ llm_context = {
 # 使用独立的模型客户端和模型 API Key，以 llm_context 生成最终回答。
 ```
 
-如需完整可运行的“画像引擎 + OpenRouter 模型回答”组合示例，直接查看 `/demo` 页面及 `src/profile_engine/demo.py` 的 `/demo/api/chat` 实现。
+如需完整可运行的“画像引擎 + 安全展示回答”组合示例，直接查看 `/demo` 页面及 `src/profile_engine/demo.py` 的 `/demo/api/chat` 实现。具体供应商配置只保留在服务器环境中。
 
 ## 8. 画像写入硬边界
 
@@ -334,7 +321,7 @@ llm_context = {
 | 413 | `request_too_large` | 请求体超过服务器配置上限 | 缩小请求体 |
 | 429 | `tenant rate limit exceeded` | 租户超过每分钟调用限制 | 按 `Retry-After` 等待 |
 | 422 | FastAPI 校验或 `invalid_operation` | 缺 Header、字段非法、跨接口/资源/请求体复用幂等键 | 修正请求，不盲重试 |
-| 502 | `model_no_response`（网站聊天） | OpenRouter 网络、区域限制或模型无有效返回 | 展示真实错误；不会生成兜底回复 |
+| 502 | `assistant_temporarily_unavailable`（网站聊天） | 回答服务暂时不可用 | 使用返回的新版本继续后续对话，不展示上游细节 |
 | 503 | `semantic_extractor_unavailable` | 外部语义提取不可用 | 有限退避重试 |
 
-常见问题：画像为空通常是未初始化或用户/租户不一致；画像未更新可能是 `no_profile_change=true`、版本冲突或未获得相应授权。限制注入长度应在 BFF 做字段白名单和字符上限，HIWM 默认 `PROFILE_CONTEXT_MAX_CHARS=8000`。
+常见问题：画像为空通常是未初始化或用户/租户不一致；画像未更新可能是 `no_profile_change=true`、版本冲突或未获得相应授权。调用方应在自己的服务端对注入模型的画像上下文设置字段白名单和字符上限，避免把完整画像或内部审计数据直接送入对话上下文。

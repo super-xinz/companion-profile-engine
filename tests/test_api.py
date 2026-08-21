@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from starlette.requests import Request
 
-from profile_engine.api import SlidingWindowRateLimiter, _resource_key, app
+from profile_engine.api import (SlidingWindowRateLimiter, _public_surface_blocked,
+                                _resource_key, app)
 from profile_engine.config import Settings
 from profile_engine.db import SessionLocal
 from profile_engine.model_catalog import MODEL_PROVIDERS
@@ -99,7 +101,31 @@ def test_production_configuration_fails_closed_and_disables_demo_defaults():
     production.validate_runtime_configuration()
     assert production.demo_features_active is False
     assert production.api_docs_active is False
+    assert production.rule_workbench_active is False
     assert production.profile_reset_active is False
+    assert Settings(_env_file=None).rule_workbench_active is False
+    forced_open = Settings(
+        _env_file=None,
+        environment="production",
+        api_docs_enabled=True,
+        rule_workbench_enabled=True,
+    )
+    assert forced_open.api_docs_active is False
+    assert forced_open.rule_workbench_active is False
+    assert "tenant_id" not in Settings.model_fields
+
+    demo_without_responder = Settings(
+        _env_file=None,
+        environment="production",
+        database_url="postgresql://profile:secret@database/profile",  # pragma: allowlist secret
+        tenant_api_keys={"customer-a": "x" * 32},
+        semantic_extractor="deterministic",
+        demo_features_enabled=True,
+        demo_access_code="strong-demo-access-code",
+        openrouter_api_key=None,
+    )
+    with pytest.raises(RuntimeError, match="PROFILE_OPENROUTER_API_KEY"):
+        demo_without_responder.validate_runtime_configuration()
 
     missing_model_key = Settings(
         _env_file=None,
@@ -137,6 +163,46 @@ def test_production_configuration_fails_closed_and_disables_demo_defaults():
     )
     with pytest.raises(RuntimeError, match="必须使用 HTTPS"):
         insecure_router.validate_runtime_configuration()
+
+    incompatible_direct_model = Settings(
+        _env_file=None,
+        environment="production",
+        database_url="postgresql://profile:secret@database/profile",  # pragma: allowlist secret
+        tenant_api_keys={"customer-a": "x" * 32},
+        semantic_extractor="deterministic",
+        openrouter_base_url="https://api.deepseek.com",
+        deepseek_model="deepseek/deepseek-v3.2",
+    )
+    with pytest.raises(RuntimeError, match="官方模型 ID"):
+        incompatible_direct_model.validate_runtime_configuration()
+
+
+def test_internal_rule_workspace_can_only_be_enabled_outside_production():
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/demo/api/rules/workspace",
+        "raw_path": b"/demo/api/rules/workspace",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+    development = Settings(
+        _env_file=None,
+        environment="development",
+        rule_workbench_enabled=True,
+    )
+    production = Settings(
+        _env_file=None,
+        environment="production",
+        rule_workbench_enabled=True,
+    )
+    assert _public_surface_blocked(request, development) is False
+    assert _public_surface_blocked(request, production) is True
 
 
 def test_rate_limiter_is_tenant_scoped_and_returns_retry_window():

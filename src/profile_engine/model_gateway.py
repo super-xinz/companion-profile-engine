@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
 
@@ -89,7 +90,11 @@ def chat_completion(
     spec = MODEL_SPECS_BY_PROVIDER[endpoint.provider]
     if json_response and spec.supports_json_object:
         payload["response_format"] = {"type": "json_object"}
-    if spec.disable_reasoning:
+    # The ``reasoning`` switch is an OpenRouter extension.  The production
+    # demo may point this OpenAI-compatible client directly at the selected
+    # provider, where sending that extension would make an otherwise valid
+    # request fail schema validation.
+    if spec.disable_reasoning and urlparse(endpoint.base_url).hostname != "api.deepseek.com":
         payload["reasoning"] = {"enabled": False}
     response = httpx.post(
         f"{endpoint.base_url}/chat/completions",

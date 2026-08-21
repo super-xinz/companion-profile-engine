@@ -3,141 +3,120 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#f4f0e8">
-  <title>共鸣 · 对话与画像工作台</title>
+  <meta name="theme-color" content="#f3f0e9">
+  <meta name="description" content="通过真实对话体验持续成长的互动理解能力。">
+  <title>共鸣 · 互动理解演示</title>
   <link rel="stylesheet" href="/assets/workbench.css">
 </head>
-<body class="workspace-page">
-  <div class="workspace-shell">
-    <aside class="people-rail">
-      <div class="brand-block">
-        <a class="brand" href="/demo" aria-label="共鸣画像引擎首页"><span class="brand-mark">共</span><span><b>共鸣</b><small>画像引擎管理平台</small></span></a>
-        <button class="rail-collapse" id="railCollapse" aria-label="收起人物列表">‹</button>
+<body>
+  <a class="skip-link" href="#chatMain">跳到对话区</a>
+
+  <div class="app-shell" id="appShell" aria-busy="true">
+    <aside class="case-panel" id="casePanel" aria-label="体验案例">
+      <header class="brand-block">
+        <a class="brand" href="/demo" aria-label="共鸣互动理解演示">
+          <span class="brand-mark" aria-hidden="true">共</span>
+          <span><b>共鸣</b><small>互动理解演示</small></span>
+        </a>
+        <button class="icon-button mobile-only" id="closeCasesBtn" type="button" aria-label="关闭案例列表">×</button>
+      </header>
+
+      <div class="case-intro">
+        <span>体验案例</span>
+        <p>选择一个人物，看看对话如何逐步形成更贴近对方的回应。</p>
       </div>
-      <nav class="workspace-switch" aria-label="工作台切换">
-        <a class="active" href="/demo"><span>◉</span><span>对话与画像</span></a>
-        <a href="/rules"><span>⌘</span><span>规则管理</span></a>
-      </nav>
-      <div class="rail-section-title"><span>人物</span><button id="addPersonBtn" aria-label="新建人物">＋</button></div>
-      <label class="search-box"><span>⌕</span><input id="peopleSearch" placeholder="搜索人物" autocomplete="off"></label>
-      <div class="people-list scroll-surface" id="peopleList" aria-live="polite"></div>
-      <div class="rail-footer">
-        <span class="avatar tiny" id="actorAvatar">管</span>
-        <span><b id="actorName">系统管理员</b><small id="actorRole">管理员</small></span>
-        <button id="logoutBtn" aria-label="退出">⋯</button>
+
+      <div class="case-list scroll-area" id="caseList" aria-live="polite">
+        <div class="list-loading" role="status">
+          <i></i><i></i><i></i>
+          <span>正在准备案例…</span>
+        </div>
       </div>
+
+      <footer class="case-footer">
+        <span class="service-dot" id="serviceDot" aria-hidden="true"></span>
+        <span><b id="serviceLabel">正在连接</b><small>体验内容彼此独立</small></span>
+        <button class="text-button" id="logoutBtn" type="button">退出</button>
+      </footer>
     </aside>
 
-    <main class="conversation-workbench">
-      <header class="conversation-head">
-        <div class="mobile-brand"><button id="mobilePeopleBtn" aria-label="打开人物列表">☰</button><b>共鸣</b></div>
-        <div class="person-heading">
-          <span class="avatar" id="personAvatar">—</span>
-          <span><b id="personName">请选择人物</b><small id="personMeta">画像与对话会同步切换</small></span>
-        </div>
-        <div class="head-controls">
-          <label class="model-select"><span>模型</span><select id="modelProviderSelect" aria-label="选择基础模型"></select></label>
-          <label class="conversation-select"><span>对话</span><select id="conversationSelect" aria-label="选择对话"></select></label>
-          <button class="button soft" id="newConversationBtn">＋ 新对话</button>
-          <button class="button primary" id="openProfileBtn">完整画像</button>
+    <button class="drawer-shade" id="drawerShade" type="button" aria-label="关闭案例列表" tabindex="-1"></button>
+
+    <main class="chat-workspace" id="chatMain">
+      <header class="chat-header">
+        <button class="icon-button mobile-only" id="openCasesBtn" type="button" aria-label="打开案例列表">☰</button>
+        <span class="person-avatar" id="personAvatar" aria-hidden="true">—</span>
+        <span class="person-title">
+          <b id="personName">请选择案例</b>
+          <small id="personTagline">从左侧选择一个人物开始体验</small>
+        </span>
+        <div class="chat-actions">
+          <label class="conversation-picker">
+            <span>对话</span>
+            <select id="conversationSelect" aria-label="选择对话" disabled>
+              <option>尚未开始</option>
+            </select>
+          </label>
+          <button class="secondary-button" id="newConversationBtn" type="button" disabled>新对话</button>
+          <button class="icon-button mobile-insight-button" id="openInsightsBtn" type="button" aria-label="查看互动理解摘要">◎</button>
         </div>
       </header>
 
-      <section class="chat-column">
-        <div class="messages scroll-surface" id="messages" tabindex="0" aria-label="聊天记录">
-          <div class="conversation-empty" id="conversationEmpty">
-            <span class="empty-orbit">◌</span>
-            <h2>一段对话，一份持续生长的理解</h2>
-            <p>长期画像属于这个人，短期上下文只属于当前对话。切换人物时，两者都会严格隔离。</p>
+      <section class="chat-stage" aria-label="互动对话">
+        <div class="messages scroll-area" id="messages" tabindex="0" aria-live="polite">
+          <div class="empty-chat">
+            <span class="empty-symbol" aria-hidden="true">◌</span>
+            <h1>在对话里，慢慢理解一个人</h1>
+            <p>选择一个案例并开始聊天。回应会参考已经形成的沟通偏好，也会随着新的互动持续调整。</p>
           </div>
         </div>
-        <button class="jump-latest" id="jumpLatestBtn">↓ 查看最新消息</button>
+        <button class="jump-button" id="jumpLatestBtn" type="button">查看最新消息 ↓</button>
+
         <div class="composer-wrap">
           <div class="composer">
-            <textarea id="messageInput" rows="1" maxlength="4000" placeholder="输入消息；Enter 发送，Shift + Enter 换行" disabled></textarea>
-            <button class="send-button" id="sendBtn" disabled aria-label="发送消息">↑</button>
+            <label class="visually-hidden" for="messageInput">输入消息</label>
+            <textarea id="messageInput" rows="1" maxlength="4000" placeholder="输入想说的话；Enter 发送，Shift + Enter 换行" disabled></textarea>
+            <button class="send-button" id="sendBtn" type="button" disabled aria-label="发送消息">↑</button>
           </div>
-          <p>模型只提出候选，规则引擎校验后才会更新画像；人工确认项不会被普通推断覆盖。</p>
+          <p>展示内容仅用于辅助组织沟通方式，不用于给人下结论。</p>
         </div>
       </section>
     </main>
 
-    <aside class="inspector-panel">
-      <header class="inspector-head">
-        <div><b>画像工作台</b><small id="inspectorSubtitle">选择人物后查看处理过程</small></div>
-        <span class="engine-status"><i></i> 引擎已连接</span>
+    <aside class="insight-panel" id="insightPanel" aria-label="互动理解摘要">
+      <header class="insight-header">
+        <span><b>互动理解摘要</b><small id="insightSubtitle">选择案例后查看</small></span>
+        <button class="icon-button mobile-only" id="closeInsightsBtn" type="button" aria-label="关闭摘要">×</button>
       </header>
-      <div class="inspector-tabs" role="tablist">
-        <button class="active" data-inspector-tab="turn">本轮处理</button>
-        <button data-inspector-tab="profile">完整画像</button>
-        <button data-inspector-tab="audit">证据与审计</button>
-      </div>
-      <div class="inspector-scroll scroll-surface">
-        <section class="inspector-view active" id="turnView"></section>
-        <section class="inspector-view" id="profileView"></section>
-        <section class="inspector-view" id="auditView"></section>
+
+      <div class="insight-scroll scroll-area" id="insightContent">
+        <div class="empty-insight">
+          <span aria-hidden="true">◎</span>
+          <b>还没有选择案例</b>
+          <p>这里会展示人物摘要、核心维度、沟通偏好和可信度说明。</p>
+        </div>
       </div>
     </aside>
   </div>
 
-  <div class="modal-backdrop hidden" id="personModal" role="dialog" aria-modal="true" aria-labelledby="personModalTitle">
-    <form class="modal-card" id="personForm">
-      <button type="button" class="modal-close" data-close-modal="personModal">×</button>
-      <span class="eyebrow">新人物</span>
-      <h2 id="personModalTitle">建立独立人物空间</h2>
-      <p>这个人物会拥有独立的长期画像、证据、对话和版本历史。</p>
-      <label class="form-field"><span>姓名</span><input name="display_name" required maxlength="128" placeholder="例如：林夏"></label>
-      <label class="form-field"><span>生日（选填）</span><input name="birth_date" type="date"></label>
-      <label class="form-field"><span>九型主型（选填，仅填已确认结果）</span><select name="enneagram_core_type"><option value="">暂不设置</option><option value="1">1 完美型</option><option value="2">2 助人型</option><option value="3">3 成就型</option><option value="4">4 自我型</option><option value="5">5 观察型</option><option value="6">6 忠诚型</option><option value="7">7 探索型</option><option value="8">8 挑战型</option><option value="9">9 和平型</option></select></label>
-      <label class="form-field"><span>侧翼（选填）</span><select name="enneagram_wing"><option value="">无/待确认</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option></select></label>
-      <label class="form-field"><span>本能叠层</span><select name="enneagram_stack"><option value="SX/SO">SX/SO</option><option value="SX/SP">SX/SP</option><option value="SP/SX">SP/SX</option><option value="SP/SO">SP/SO</option><option value="SO/SX">SO/SX</option><option value="SO/SP">SO/SP</option></select></label>
-      <label class="form-field"><span>团队备注（选填）</span><textarea name="notes" rows="3" maxlength="1000" placeholder="仅团队可见"></textarea></label>
-      <button class="button primary wide" type="submit">创建人物并初始化画像</button>
-    </form>
-  </div>
-
-  <div class="modal-backdrop hidden" id="editModal" role="dialog" aria-modal="true" aria-labelledby="editModalTitle">
-    <form class="modal-card" id="editForm">
-      <button type="button" class="modal-close" data-close-modal="editModal">×</button>
-      <span class="eyebrow">人工更正 · 高优先级</span>
-      <h2 id="editModalTitle">调整画像字段</h2>
-      <p id="editFieldDescription">保存后会生成新画像版本和审计记录，并锁定该字段。</p>
-      <input type="hidden" name="target_path">
-      <label class="form-field"><span>调整值</span><input name="value" type="range" min="0" max="1" step="0.01"><output id="editValueOutput">0.50</output></label>
-      <label class="form-field"><span>更正原因</span><textarea name="reason" required rows="3" maxlength="1000" placeholder="说明为何需要人工更正"></textarea></label>
-      <button class="button primary wide" type="submit">保存更正并锁定</button>
-    </form>
-  </div>
-
-  <div class="modal-backdrop hidden" id="enneagramModal" role="dialog" aria-modal="true" aria-labelledby="enneagramModalTitle">
-    <form class="modal-card" id="enneagramForm">
-      <button type="button" class="modal-close" data-close-modal="enneagramModal">×</button>
-      <span class="eyebrow">明确输入 · 不自动分类</span>
-      <h2 id="enneagramModalTitle">维护九型互动画像</h2>
-      <p>仅填写用户明确声明、授权测评或专家确认的结果。保存后会生成新画像版本、派生策略和审计记录。</p>
-      <label class="form-field"><span>主型</span><select name="core_type" required><option value="1">1 完美型</option><option value="2">2 助人型</option><option value="3">3 成就型</option><option value="4">4 自我型</option><option value="5">5 观察型</option><option value="6">6 忠诚型</option><option value="7">7 探索型</option><option value="8">8 挑战型</option><option value="9">9 和平型</option></select></label>
-      <label class="form-field"><span>侧翼（选填）</span><select name="wing"><option value="">无/待确认</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option></select></label>
-      <label class="form-field"><span>本能叠层</span><select name="stack"><option value="SX/SO">SX/SO</option><option value="SX/SP">SX/SP</option><option value="SP/SX">SP/SX</option><option value="SP/SO">SP/SO</option><option value="SO/SX">SO/SX</option><option value="SO/SP">SO/SP</option></select></label>
-      <label class="form-field"><span>来源</span><select name="source"><option value="expert_confirmed">专家确认</option><option value="external_assessment">外部测评</option><option value="user_supplied">用户声明</option></select></label>
-      <label class="form-field"><span>维护原因</span><textarea name="reason" required rows="3" maxlength="1000" placeholder="例如：专家复核测评结果"></textarea></label>
-      <button class="button primary wide" type="submit">保存九型画像</button>
-    </form>
-  </div>
-
   <div class="access-gate" id="accessGate">
     <form class="gate-card" id="accessForm">
-      <div class="gate-brand"><span class="brand-mark large">共</span><span><b>共鸣画像引擎</b><small>团队管理平台</small></span></div>
-      <span class="eyebrow">对话与画像工作台</span>
-      <h1>理解一个人，需要时间，也需要边界。</h1>
-      <p>在一个安全、可审计的空间里管理多个人物、长期画像和独立对话。</p>
-      <label class="form-field"><span>访问密码</span><input id="gateCode" type="password" autocomplete="current-password" autofocus></label>
-      <div class="form-error" id="gateError"></div>
-      <button class="button primary wide" type="submit">进入工作台</button>
-      <small class="privacy-note">同一浏览器标签页内只需输入一次；在两个工作台之间切换无需重复验证。</small>
+      <div class="gate-brand">
+        <span class="brand-mark large" aria-hidden="true">共</span>
+        <span><b>共鸣</b><small>互动理解演示</small></span>
+      </div>
+      <span class="eyebrow">受邀体验</span>
+      <h1>让每一次回应，都更懂对方一点。</h1>
+      <p>输入负责人提供的访问口令，即可体验五个已经准备好的互动案例。</p>
+      <label class="field-label" for="gateCode">访问口令</label>
+      <input class="gate-input" id="gateCode" type="password" autocomplete="current-password" required>
+      <div class="form-error" id="gateError" role="alert"></div>
+      <button class="primary-button wide" id="gateSubmitBtn" type="submit">进入体验</button>
+      <small class="privacy-note">口令仅保存在当前浏览器标签页，关闭后自动清除。</small>
     </form>
   </div>
 
-  <div class="toast" id="toast" role="status"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/assets/demo.js"></script>
 </body>
 </html>

@@ -5,7 +5,8 @@ import httpx
 from profile_engine.config import Settings
 from profile_engine.extractor import ModelSemanticExtractor, SemanticExtractorError
 from profile_engine.model_catalog import MODEL_PROVIDERS
-from profile_engine.model_gateway import (ModelEndpoint, get_model_endpoint,
+from profile_engine.model_gateway import (ModelEndpoint, chat_completion,
+                                          get_model_endpoint,
                                           public_model_options)
 
 
@@ -100,6 +101,39 @@ def test_deepseek_extractor_uses_openrouter_and_validates_structured_frames(monk
     assert captured["json"]["model"] == "deepseek/deepseek-v3.2"
     assert captured["json"]["response_format"] == {"type": "json_object"}
     assert captured["json"]["reasoning"] == {"enabled": False}
+
+
+def test_direct_deepseek_request_omits_router_only_reasoning_switch(monkeypatch):
+    captured = {}
+
+    def fake_post(*args, **kwargs):
+        captured.update(kwargs)
+        request = httpx.Request("POST", args[0])
+        return httpx.Response(200, request=request, json={
+            "model": "deepseek-chat",
+            "choices": [{"message": {"content": "ok"}}],
+        })
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    direct = ModelEndpoint(
+        provider="deepseek",
+        label="DeepSeek",
+        route_label="direct",
+        api_key="secret",  # pragma: allowlist secret
+        base_url="https://api.deepseek.com",
+        model="deepseek-chat",
+        timeout=30,
+        extra_headers={},
+    )
+    reply, resolved = chat_completion(
+        direct,
+        [{"role": "user", "content": "hello"}],
+        temperature=0.5,
+        max_tokens=20,
+    )
+    assert reply == "ok"
+    assert resolved == "deepseek-chat"
+    assert "reasoning" not in captured["json"]
 
 
 def test_claude_extractor_accepts_fenced_json_without_forcing_response_format(monkeypatch):

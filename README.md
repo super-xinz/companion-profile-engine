@@ -1,6 +1,6 @@
 # 共鸣画像引擎
 
-本次双项目协同进化的交付入口：[系统使用与交付说明](docs/SYSTEM_USAGE_AND_DELIVERY.md)、[API 使用文档](docs/API_USAGE.md)、[B 端交付方案](docs/B2B_DELIVERY.md)、[Zeabur 部署](docs/DEPLOYMENT_ZEABUR.md)、[实施报告](IMPLEMENTATION_REPORT.md) 与 [Postman Collection](postman/companion-profile-engine.postman_collection.json)。
+本项目的交付入口：[系统使用与交付说明](docs/SYSTEM_USAGE_AND_DELIVERY.md)、[API 使用文档](docs/API_USAGE.md)、[B 端交付方案](docs/B2B_DELIVERY.md)、[Zeabur 部署](docs/DEPLOYMENT_ZEABUR.md)、[实施报告](IMPLEMENTATION_REPORT.md) 与 [Postman Collection](postman/companion-profile-engine.postman_collection.json)。
 
 面向陪伴机器人与心理／学习专家协作的多人画像管理平台。系统将规则、人物、长期画像、证据、对话和人工修正统一管理；模型只能提出候选，只有通过规则校验的内容才会进入画像。
 
@@ -14,7 +14,7 @@
 - 完整画像：展示 17 个核心维度、MBTI 连续维度、身份事实、记忆、状态、证据、置信度、更新时间与版本。
 - 人工修正：支持更正事实、调整画像、遗忘记忆和标记错误推断；所有更正都进入审计记录，并优先于普通模型推断。
 - 聊天过程可追溯：查看语义理解、命中规则、画像变化和回答策略。
-- 单一访问密码：在同一浏览器标签页中输入一次即可在两个工作台间切换。
+- 独立访问口令：公开体验页只展示中性案例、对话、核心指标、沟通偏好与可信度说明。
 
 ### 规则管理工作台
 
@@ -112,6 +112,7 @@ PROFILE_GEMINI_MODEL=google/gemini-3.1-pro-preview
 PROFILE_KIMI_MODEL=moonshotai/kimi-k3
 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true
 PROFILE_DEMO_FEATURES_ENABLED=false
+PROFILE_RULE_WORKBENCH_ENABLED=false
 PROFILE_API_DOCS_ENABLED=false
 PROFILE_ALLOW_PROFILE_RESET=false
 PROFILE_RATE_LIMIT_PER_MINUTE=120
@@ -122,7 +123,7 @@ PROFILE_MAX_REQUEST_BODY_BYTES=2500000
 PROFILE_IDEMPOTENCY_TTL_HOURS=24
 ```
 
-所有可选模型均通过 OpenRouter 调用。工作台顶部可随时切换，模型共用服务器端 `PROFILE_OPENROUTER_API_KEY`，密钥不会下发浏览器。核心消息 API 可通过 `model_provider=deepseek|claude|gpt|glm|gemini|kimi` 按请求选择。若不使用外部模型服务，请将 `PROFILE_SEMANTIC_EXTRACTOR` 设为 `deterministic`。
+核心消息 API 可通过 `model_provider=deepseek|claude|gpt|glm|gemini|kimi` 按请求选择外部语义服务。公开体验页固定使用服务器配置，不提供供应商选择，也不向浏览器下发供应商、模型或密钥信息。若不使用外部语义服务，请将 `PROFILE_SEMANTIC_EXTRACTOR` 设为 `deterministic`。
 
 ## Docker 部署
 
