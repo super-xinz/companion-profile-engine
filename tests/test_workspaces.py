@@ -80,6 +80,16 @@ def test_public_workspace_uses_aliases_and_whitelisted_dtos_only():
                 assert "不是对一个人的判断准确率" in item["confidence_explanation"]
             _assert_public_payload(boot.json())
 
+            initial_conversation_counts = {
+                item["public_id"]: item["conversation_count"] for item in people
+            }
+            repeated_boot = client.post("/demo/api/workspace/bootstrap")
+            assert repeated_boot.status_code == 200, repeated_boot.text
+            assert {
+                item["public_id"]: item["conversation_count"]
+                for item in repeated_boot.json()["people"]
+            } == initial_conversation_counts
+
             summaries = {}
             for identity in PUBLIC_TEMPLATE_IDENTITIES.values():
                 example = client.get(f"/demo/api/people/{identity.public_id}")

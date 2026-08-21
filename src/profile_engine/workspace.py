@@ -221,7 +221,12 @@ def _sync_template_people(db: Session, tenant_id: str, pack, ensure_conversation
                 pack, f"seed-sync_{uuid.uuid4().hex}", f"seed-sync-{tenant_id}-{user.tenant_user_id}",
             )
         if ensure_conversation:
-            _ensure_conversation(db, user, title=f"{person.display_name}的第一段对话")
+            has_active_conversation = db.scalar(select(Conversation.id).where(
+                Conversation.user_id == user.id,
+                Conversation.status == "active",
+            ).limit(1))
+            if not has_active_conversation:
+                _ensure_conversation(db, user, title="示例对话")
 
 
 def _seed_people(db: Session, tenant_id: str, request: Request) -> None:
@@ -245,7 +250,7 @@ def _seed_people(db: Session, tenant_id: str, request: Request) -> None:
             pack, f"seed_{uuid.uuid4().hex}", f"seed-{tenant_id}-{user_id}",
         )
         user = find_user(db, tenant_id, user_id)
-        _ensure_conversation(db, user, title=f"{name}的第一段对话")
+        _ensure_conversation(db, user, title="示例对话")
         response["profile_version"]
         db.commit()
 
