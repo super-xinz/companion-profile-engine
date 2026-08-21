@@ -180,7 +180,8 @@ docker compose up --build
 ## 开发说明
 
 - 规则源文件位于 `rules/`，发布后会编译为带版本和校验结果的规则资产。
-- `scripts/reset_demo_people.py` 会重建五位内置模板人物并保留其他演示人物；仅可用于明确授权的演示数据库。
+- 生产环境补充内置模板人物时，使用默认 dry-run、只插入缺失项的[安全播种指南](docs/SEED_TEMPLATE_PEOPLE.md)。
+- `scripts/reset_demo_people.py` 会重建五位旧 ID 模板人物并保留其他演示人物；仅可用于明确授权的演示数据库，禁止用于生产。
 - 开发时请保持 `.env`、数据库文件、模型密钥和任何未授权的个人资料不进入 Git。
 
 ## 许可证

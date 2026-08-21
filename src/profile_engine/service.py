@@ -106,7 +106,16 @@ def ensure_rule_pack(db: Session, pack: CompiledRulePack) -> RulePack:
     return record
 
 
-def init_profile(db: Session, tenant_id: str, body: ProfileInitRequest, pack: RulePack, req_id: str, idem_key: str) -> dict:
+def init_profile(
+    db: Session,
+    tenant_id: str,
+    body: ProfileInitRequest,
+    pack: RulePack,
+    req_id: str,
+    idem_key: str,
+    *,
+    template_public_id: str | None = None,
+) -> dict:
     if not body.consent.profile:
         raise ConsentError("必须取得画像授权后才能初始化")
     if body.enneagram and not body.consent.sensitive_inference:
@@ -190,7 +199,7 @@ def init_profile(db: Session, tenant_id: str, body: ProfileInitRequest, pack: Ru
     if enneagram_evidence_id:
         profile["enneagram_profile"]["provenance"].append(enneagram_evidence_id)
     if effective_birth:
-        apply_source_profile(profile, effective_birth)
+        apply_source_profile(profile, effective_birth, template_public_id=template_public_id)
         recalculate_meta(profile)
     if body.birth_date and not body.consent.sensitive_inference:
         profile["identity"]["birth_date"] = body.birth_date.isoformat()

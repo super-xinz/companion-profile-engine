@@ -59,7 +59,12 @@ def load_source_document(birth_date: str) -> dict | None:
         workbook.close()
 
 
-def apply_source_profile(profile: dict, birth_date: str) -> bool:
+def apply_source_profile(
+    profile: dict,
+    birth_date: str,
+    *,
+    template_public_id: str | None = None,
+) -> bool:
     """Overlay the exact user-supplied profile and retain every original workbook cell."""
     document = load_source_document(birth_date)
     if not document:
@@ -154,7 +159,9 @@ def apply_source_profile(profile: dict, birth_date: str) -> bool:
         for key, item in source_portrait.items()
     }
     profile["source_profile_document"] = document
-    profile["identity"]["template_person_id"] = template_person_for_birth_date(birth_date).user_id
+    profile["identity"]["template_person_id"] = (
+        template_public_id or template_person_for_birth_date(birth_date).user_id
+    )
     profile["meta"]["warnings"] = [
         warning for warning in profile["meta"].get("warnings", [])
         if "黄金样例" not in warning and "专家尚未提供任意生日到四位数字学编码" not in warning
