@@ -89,13 +89,13 @@ def test_explicit_enneagram_identity_scene_strategy_update_and_forget():
         )
         assert turn.status_code == 200, turn.text
         body = turn.json()
-        assert body["strategy_trace"]["enneagram_identity"] == "SX/SO｜7w6"
+        assert "enneagram" in body["strategy_trace"]["reference_models_excluded"]
         assert body["strategy_trace"]["scene"] == "career_decision"
-        assert body["reply_hints"]["enneagram_strategy"]["scene_adaptation"]["role"] == "方向澄清与小实验设计者"
+        assert "enneagram_strategy" not in body["reply_hints"]
         assert set(body["reply_hints"]["turn_plan"]) >= {
             "communication", "motivation", "conflict", "trust", "companionship",
         }
-        assert "document_05_instinct_subtype" in body["strategy_trace"]["strategy_sources"]
+        assert "evidence_backed_traits" in body["strategy_trace"]["strategy_sources"]
         assert body["behavior_directives"]["safety_gate_required"] is True
         assert body["behavior_directives"]["device_actions"] == []
         assert "structure_level" not in body["reply_hints"]["rule_locked_fields"]
@@ -184,7 +184,7 @@ def test_portrait_bridge_and_scene_strategy_do_not_auto_assign_enneagram():
         )
         assert turn.status_code == 200, turn.text
         body = turn.json()
-        assert body["strategy_trace"]["enneagram_identity"] is None
+        assert "enneagram" in body["strategy_trace"]["reference_models_excluded"]
         assert body["strategy_trace"]["scene"] == "career_decision"
         assert "enneagram_strategy" not in body["reply_hints"]
-        assert body["reply_hints"]["profile_parameter_input"]["identity"]["core_type"] is None
+        assert "profile_parameter_input" not in body["reply_hints"]

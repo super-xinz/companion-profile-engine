@@ -39,7 +39,8 @@ def test_demo_page_and_conversation_flow(monkeypatch):
             assert page.status_code == 200
             assert "对话与画像工作台" in page.text
             assert 'class="messages scroll-surface"' in page.text
-            assert "完整画像" in page.text
+            assert "画像详情" in page.text
+            assert "专家参考" in page.text
             assert "规则管理" in page.text
             assert 'id="modelProviderSelect"' in page.text
 

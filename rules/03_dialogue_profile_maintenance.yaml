@@ -650,8 +650,21 @@ runtime_state_and_memory:
     dislikes_humor:
       target: "humor_level"
       value: 0.0
+    prefers_direct_responses:
+      target: "directness"
+      value: "direct"
+    prefers_fewer_questions:
+      target: "question_load"
+      value: "low"
   current_state:
     emotion:
+      predicates: ["positive_mood", "low_mood", "angry_now"]
+      value: 0.5
+      values:
+        positive_mood: "positive"
+        low_mood: "low"
+        angry_now: "angry"
+      ttl_hours: 2
       ttl: "2h"
       merge: "new_explicit_state_overwrites_same_emotion_dimension"
     stress_level:

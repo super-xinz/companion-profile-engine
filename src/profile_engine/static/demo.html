@@ -39,7 +39,7 @@
           <label class="model-select"><span>模型</span><select id="modelProviderSelect" aria-label="选择基础模型"></select></label>
           <label class="conversation-select"><span>对话</span><select id="conversationSelect" aria-label="选择对话"></select></label>
           <button class="button soft" id="newConversationBtn">＋ 新对话</button>
-          <button class="button primary" id="openProfileBtn">完整画像</button>
+          <button class="button primary" id="openProfileBtn">画像详情</button>
         </div>
       </header>
 
@@ -57,7 +57,7 @@
             <textarea id="messageInput" rows="1" maxlength="4000" placeholder="输入消息；Enter 发送，Shift + Enter 换行" disabled></textarea>
             <button class="send-button" id="sendBtn" disabled aria-label="发送消息">↑</button>
           </div>
-          <p>模型只提出候选，规则引擎校验后才会更新画像；人工确认项不会被普通推断覆盖。</p>
+          <p>系统只保存可核验的用户事实、偏好和行为证据；参考模型不会直接决定回答。</p>
         </div>
       </section>
     </main>
@@ -68,14 +68,16 @@
         <span class="engine-status"><i></i> 引擎已连接</span>
       </header>
       <div class="inspector-tabs" role="tablist">
-        <button class="active" data-inspector-tab="turn">本轮处理</button>
-        <button data-inspector-tab="profile">完整画像</button>
-        <button data-inspector-tab="audit">证据与审计</button>
+        <button class="active" data-inspector-tab="turn">本轮建议</button>
+        <button data-inspector-tab="profile">画像详情</button>
+        <button data-inspector-tab="audit">依据与变化</button>
+        <button data-inspector-tab="expert">专家参考</button>
       </div>
       <div class="inspector-scroll scroll-surface">
         <section class="inspector-view active" id="turnView"></section>
         <section class="inspector-view" id="profileView"></section>
         <section class="inspector-view" id="auditView"></section>
+        <section class="inspector-view" id="expertView"></section>
       </div>
     </aside>
   </div>
@@ -87,10 +89,7 @@
       <h2 id="personModalTitle">建立独立人物空间</h2>
       <p>这个人物会拥有独立的长期画像、证据、对话和版本历史。</p>
       <label class="form-field"><span>姓名</span><input name="display_name" required maxlength="128" placeholder="例如：林夏"></label>
-      <label class="form-field"><span>生日（选填）</span><input name="birth_date" type="date"></label>
-      <label class="form-field"><span>九型主型（选填，仅填已确认结果）</span><select name="enneagram_core_type"><option value="">暂不设置</option><option value="1">1 完美型</option><option value="2">2 助人型</option><option value="3">3 成就型</option><option value="4">4 自我型</option><option value="5">5 观察型</option><option value="6">6 忠诚型</option><option value="7">7 探索型</option><option value="8">8 挑战型</option><option value="9">9 和平型</option></select></label>
-      <label class="form-field"><span>侧翼（选填）</span><select name="enneagram_wing"><option value="">无/待确认</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option></select></label>
-      <label class="form-field"><span>本能叠层</span><select name="enneagram_stack"><option value="SX/SO">SX/SO</option><option value="SX/SP">SX/SP</option><option value="SP/SX">SP/SX</option><option value="SP/SO">SP/SO</option><option value="SO/SX">SO/SX</option><option value="SO/SP">SO/SP</option></select></label>
+      <label class="form-field"><span>生日（选填，仅作为事实）</span><input name="birth_date" type="date"><small>默认不用于出生信息推断或类型判断。</small></label>
       <label class="form-field"><span>团队备注（选填）</span><textarea name="notes" rows="3" maxlength="1000" placeholder="仅团队可见"></textarea></label>
       <button class="button primary wide" type="submit">创建人物并初始化画像</button>
     </form>
@@ -112,15 +111,15 @@
   <div class="modal-backdrop hidden" id="enneagramModal" role="dialog" aria-modal="true" aria-labelledby="enneagramModalTitle">
     <form class="modal-card" id="enneagramForm">
       <button type="button" class="modal-close" data-close-modal="enneagramModal">×</button>
-      <span class="eyebrow">明确输入 · 不自动分类</span>
-      <h2 id="enneagramModalTitle">维护九型互动画像</h2>
-      <p>仅填写用户明确声明、授权测评或专家确认的结果。保存后会生成新画像版本、派生策略和审计记录。</p>
+      <span class="eyebrow">内部参考模型 · 不进入默认画像</span>
+      <h2 id="enneagramModalTitle">维护九型类型参考</h2>
+      <p>仅记录用户声明、授权测评或专家确认的结果。它不会自动分类，也不会在缺少独立对话证据时决定聊天回答。</p>
       <label class="form-field"><span>主型</span><select name="core_type" required><option value="1">1 完美型</option><option value="2">2 助人型</option><option value="3">3 成就型</option><option value="4">4 自我型</option><option value="5">5 观察型</option><option value="6">6 忠诚型</option><option value="7">7 探索型</option><option value="8">8 挑战型</option><option value="9">9 和平型</option></select></label>
       <label class="form-field"><span>侧翼（选填）</span><select name="wing"><option value="">无/待确认</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option></select></label>
       <label class="form-field"><span>本能叠层</span><select name="stack"><option value="SX/SO">SX/SO</option><option value="SX/SP">SX/SP</option><option value="SP/SX">SP/SX</option><option value="SP/SO">SP/SO</option><option value="SO/SX">SO/SX</option><option value="SO/SP">SO/SP</option></select></label>
       <label class="form-field"><span>来源</span><select name="source"><option value="expert_confirmed">专家确认</option><option value="external_assessment">外部测评</option><option value="user_supplied">用户声明</option></select></label>
       <label class="form-field"><span>维护原因</span><textarea name="reason" required rows="3" maxlength="1000" placeholder="例如：专家复核测评结果"></textarea></label>
-      <button class="button primary wide" type="submit">保存九型画像</button>
+      <button class="button primary wide" type="submit">保存内部参考</button>
     </form>
   </div>
 

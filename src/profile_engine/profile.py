@@ -26,6 +26,14 @@ TRAIT_NAMES = {
     "optimism": "乐观度", "romantic_orientation": "关系投入",
 }
 
+PUBLIC_PROFILE_SCHEMA_VERSION = "public-profile-v1"
+EVIDENCE_GRADE_LABELS = {
+    "confirmed": "本人或专家确认",
+    "well_supported": "较充分",
+    "emerging": "初步观察",
+    "unverified": "待观察",
+}
+
 
 class BirthFeatureCalculator:
     """Birthday feature adapter kept for compatibility with the profile builder."""
@@ -107,17 +115,32 @@ def _scenario_item(key: str, spec: dict, traits: dict) -> dict:
 
 def derive_behavior(profile: dict, schema: dict) -> dict:
     traits = flattened_traits(profile)
-    return {
+    previous = profile.get("behavior_style", {})
+    derived = {
         group_key: {
             scenario_key: _scenario_item(scenario_key, spec, traits)
             for scenario_key, spec in group["scenarios"].items()
         }
         for group_key, group in schema["canonical_profile"]["behavior_style"]["groups"].items()
     }
+    # Direct dialogue observations are independent evidence. Rebuilding the
+    # trait-derived layer must not silently erase them.
+    for group_key, scenarios in derived.items():
+        for scenario_key, item in scenarios.items():
+            old = previous.get(group_key, {}).get(scenario_key, {})
+            direct_refs = list(dict.fromkeys(old.get("direct_evidence_refs", [])))
+            observations = old.get("observations", [])[-8:]
+            if direct_refs:
+                item["direct_evidence_refs"] = direct_refs
+                item["observations"] = observations
+                item["confidence"] = max(item["confidence"], float(old.get("confidence", 0)))
+                item["explanation"] = "包含直接对话观察；底层维度只作为辅助归纳。"
+    return derived
 
 
 def derive_language(profile: dict, schema: dict) -> dict:
     traits = flattened_traits(profile)
+    previous = profile.get("language_style", {})
     ranked = sorted(traits.items(), key=lambda pair: abs(pair[1]["value"] - 0.5) * pair[1]["confidence"], reverse=True)
 
     def item(index: int, kind: str) -> dict:
@@ -130,7 +153,7 @@ def derive_language(profile: dict, schema: dict) -> dict:
 
     groups = schema["canonical_profile"]["language_style"]["groups"]
     contexts = groups["typical_utterances"]["fixed_contexts"]
-    return {
+    result = {
         "speaking_style": [item(i, "说话方式") for i in range(6)],
         "humor": [item(i + 6, "幽默") for i in range(3)],
         "emotion_expression": [item(i + 9, "情绪表达") for i in range(4)],
@@ -146,6 +169,15 @@ def derive_language(profile: dict, schema: dict) -> dict:
             for _ in range(5)
         ],
     }
+    observed = [
+        entry for entry in previous.get("speaking_style", [])
+        if entry.get("origin") == "observed"
+    ]
+    if observed:
+        result["speaking_style"] = [*observed[-6:], *result["speaking_style"]][:6]
+    if previous.get("observation_state"):
+        result["observation_state"] = deepcopy(previous["observation_state"])
+    return result
 
 
 def derive_portrait(profile: dict) -> dict:
@@ -259,6 +291,197 @@ def recalculate_meta(profile: dict) -> None:
     traits = flattened_traits(profile)
     profile["meta"]["overall_confidence"] = round(sum(x["confidence"] for x in traits.values()) / len(traits), 4)
     profile["meta"]["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def validate_profile_snapshot(profile: dict) -> None:
+    """Validate invariants that the JSON database column cannot enforce."""
+    required = {
+        "identity", "birth_analysis", "digital_code_profile", "mbti_dimensions",
+        "core_traits", "enneagram_profile", "behavior_style", "language_style",
+        "portrait", "runtime", "meta",
+    }
+    missing = sorted(required - set(profile))
+    if missing:
+        raise ValueError(f"画像快照缺少顶层字段: {missing}")
+    traits = flattened_traits(profile)
+    missing_traits = sorted(set(TRAIT_NAMES) - set(traits))
+    unknown_traits = sorted(set(traits) - set(TRAIT_NAMES))
+    if missing_traits or unknown_traits:
+        raise ValueError(f"画像17维结构不完整，缺少={missing_traits}，未知={unknown_traits}")
+    for key, entry in traits.items():
+        if not isinstance(entry, dict):
+            raise ValueError(f"画像维度 {key} 必须是对象")
+        for number_key in ("value", "confidence"):
+            value = entry.get(number_key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+                raise ValueError(f"画像维度 {key}.{number_key} 必须在0到1之间")
+        if not isinstance(entry.get("evidence_refs", []), list):
+            raise ValueError(f"画像维度 {key}.evidence_refs 必须是数组")
+    runtime = profile["runtime"]
+    for key, default_type in (
+        ("interaction_preferences", dict), ("current_state", dict), ("memories", list),
+    ):
+        if not isinstance(runtime.get(key), default_type):
+            raise ValueError(f"runtime.{key} 类型不正确")
+
+
+def _trait_direction(value: float) -> tuple[str, str, int]:
+    if value < 0.35:
+        return "lower", "较少表现", 24
+    if value > 0.65:
+        return "higher", "较常表现", 76
+    return "balanced", "视情境而定", 50
+
+
+def _evidence_grade(summary: dict[str, Any]) -> str:
+    if summary.get("confirmed", 0):
+        return "confirmed"
+    if summary.get("repeated", 0) or summary.get("independent_sessions", 0) >= 3 or summary.get("explicit", 0) >= 2:
+        return "well_supported"
+    if summary.get("explicit", 0) or summary.get("observed", 0):
+        return "emerging"
+    return "unverified"
+
+
+def build_public_profile(profile: dict, evidence_by_path: dict[str, dict[str, Any]] | None = None) -> dict:
+    """Project an internal snapshot into the evidence-oriented presentation contract.
+
+    Reference systems, raw source files, birthdays and internal confidence numbers
+    are deliberately absent. Callers needing those fields must use an explicitly
+    authorized expert endpoint.
+    """
+    evidence_by_path = evidence_by_path or {}
+    public_traits: dict[str, dict[str, dict[str, Any]]] = {}
+    trusted_traits: dict[str, tuple[str, dict[str, Any], float]] = {}
+    for category_key, category in profile.get("core_traits", {}).items():
+        public_traits[category_key] = {}
+        for trait_key, entry in category.items():
+            path = f"core_traits.{category_key}.{trait_key}"
+            summary = evidence_by_path.get(path, {})
+            grade = _evidence_grade(summary)
+            if grade == "unverified":
+                direction, tendency, position = "unknown", "证据待积累", 50
+            else:
+                direction, tendency, position = _trait_direction(float(entry.get("value", 0.5)))
+            non_prior_count = int(summary.get("confirmed", 0) + summary.get("explicit", 0)
+                                  + summary.get("repeated", 0) + summary.get("observed", 0))
+            public_item = {
+                "label": TRAIT_NAMES.get(trait_key, trait_key),
+                "direction": direction,
+                "tendency": tendency,
+                "position": position,
+                "evidence_grade": grade,
+                "evidence_grade_label": EVIDENCE_GRADE_LABELS[grade],
+                "evidence_count": non_prior_count,
+                "basis": {
+                    "confirmed": int(summary.get("confirmed", 0)),
+                    "self_report": int(summary.get("explicit", 0)),
+                    "repeated_observation": int(summary.get("repeated", 0)),
+                    "single_observation": int(summary.get("observed", 0)),
+                    "independent_sessions": int(summary.get("independent_sessions", 0)),
+                },
+                "updated_at": entry.get("updated_at"),
+                "editable_path": path,
+            }
+            public_traits[category_key][trait_key] = public_item
+            if grade != "unverified":
+                trusted_traits[trait_key] = (grade, public_item, abs(float(entry.get("value", 0.5)) - 0.5))
+
+    rank = {"confirmed": 3, "well_supported": 2, "emerging": 1, "unverified": 0}
+    stable = sorted(
+        trusted_traits.values(), key=lambda item: (rank[item[0]], item[2]), reverse=True,
+    )
+    if stable:
+        descriptions = [f"{item[1]['label']}方面{item[1]['tendency']}" for item in stable[:3]]
+        overall_observation = "已有证据显示，" + "；".join(descriptions) + "。这些描述会随新对话继续校准。"
+    else:
+        overall_observation = "对话证据仍在积累，目前不适合形成稳定的人物结论。"
+
+    public_behavior: dict[str, dict[str, Any]] = {}
+    for group_key, scenarios in profile.get("behavior_style", {}).items():
+        visible: dict[str, Any] = {}
+        for scenario_key, item in scenarios.items():
+            direct_refs = item.get("direct_evidence_refs", [])
+            driver_keys = [ref.get("field") for ref in item.get("parameter_refs", []) if isinstance(ref, dict)]
+            driver_grades = [trusted_traits[key][0] for key in driver_keys if key in trusted_traits]
+            if not direct_refs and not driver_grades:
+                continue
+            grade = "well_supported" if len(direct_refs) >= 3 else (
+                "emerging" if direct_refs else max(driver_grades, key=rank.get)
+            )
+            latest = (item.get("observations") or [{}])[-1]
+            visible[scenario_key] = {
+                "observation": latest.get("summary") or item.get("feature"),
+                "basis": "直接对话观察" if direct_refs else "由已有行为证据归纳",
+                "evidence_grade": grade,
+                "evidence_grade_label": EVIDENCE_GRADE_LABELS[grade],
+                "evidence_count": len(direct_refs),
+            }
+        if visible:
+            public_behavior[group_key] = visible
+
+    language_items = [
+        {
+            "label": item.get("behavior") or item.get("label"),
+            "sample_count": int(item.get("sample_count", 0)),
+            "evidence_grade": "well_supported" if int(item.get("sample_count", 0)) >= 5 else "emerging",
+            "evidence_grade_label": EVIDENCE_GRADE_LABELS[
+                "well_supported" if int(item.get("sample_count", 0)) >= 5 else "emerging"
+            ],
+        }
+        for item in profile.get("language_style", {}).get("speaking_style", [])
+        if item.get("origin") == "observed" and int(item.get("sample_count", 0)) >= 3
+    ]
+
+    coverage = len(trusted_traits)
+    if coverage >= 12 and sum(rank[item[0]] >= 2 for item in stable) >= 5:
+        evidence_level = "较充分"
+    elif coverage >= 5:
+        evidence_level = "形成中"
+    elif coverage:
+        evidence_level = "初步"
+    else:
+        evidence_level = "待积累"
+
+    runtime = profile.get("runtime", {})
+    identity = profile.get("identity", {})
+    return {
+        "schema_version": PUBLIC_PROFILE_SCHEMA_VERSION,
+        "display_mode": "evidence_oriented",
+        "summary": {
+            "overall_observation": overall_observation,
+            "evidence_level": evidence_level,
+            "observed_dimensions": coverage,
+            "total_dimensions": len(TRAIT_NAMES),
+        },
+        "identity": {
+            "display_name": identity.get("display_name"),
+            "timezone": identity.get("timezone"),
+        },
+        "interaction": {
+            "preferences": deepcopy(runtime.get("interaction_preferences", {})),
+            "current_state": deepcopy(runtime.get("current_state", {})),
+        },
+        "stable_tendencies": public_traits,
+        "scenario_observations": public_behavior,
+        "communication_observations": language_items,
+        "facts_and_memories": deepcopy(runtime.get("memories", [])),
+        "meta": {
+            "profile_version": profile.get("meta", {}).get("profile_version"),
+            "updated_at": profile.get("meta", {}).get("updated_at"),
+            "evidence_level": evidence_level,
+            "observed_dimensions": coverage,
+            "total_dimensions": len(TRAIT_NAMES),
+        },
+        "visibility": {
+            "internal_reference_available": True,
+            "hidden_from_default_view": [
+                "birth_analysis", "digital_code_profile", "mbti_dimensions",
+                "enneagram_profile", "source_profile_document", "source_portrait",
+                "internal_confidence", "internal_weights",
+            ],
+        },
+    }
 
 
 def rebuild_derived(profile: dict, schema: dict) -> list[str]:

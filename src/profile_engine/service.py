@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, select, update
 from sqlalchemy.orm import Session
 
 from .config import get_settings
@@ -16,11 +16,13 @@ from .digital_code import (aggregate_trait_priors, build_digital_code_profile,
 from .enneagram import (build_enneagram_profile, build_portrait_parameter_input, empty_enneagram_profile,
                          resolve_interaction_strategy)
 from .extractor import SemanticExtractor, get_semantic_extractor
-from .models import (AuditLog, CurrentState, ManualOverride, Memory, ProfileEvidence,
-                     ProfileVersion, RulePack, RuntimePreference, User)
+from .models import (AuditLog, ChatMessage, Conversation, CurrentState, ManualOverride,
+                     Memory, ProfileEvidence, ProfileVersion, RulePack,
+                     RuntimePreference, User)
 from .profile import (GOLDEN_TRAITS, TRAIT_NAMES, BirthFeatureCalculator,
-                      build_initial_profile, build_profile_table_view, clone_profile,
+                      build_initial_profile, build_profile_table_view, build_public_profile, clone_profile,
                       find_trait, flattened_traits, rebuild_derived, recalculate_meta)
+from .profile import validate_profile_snapshot
 from .rule_compiler import CompiledRulePack
 from .rule_bank import extract_signals, fragments_for_code
 from .schemas import (CorrectionRequest, ForgetRequest, MessageIngestRequest, ProfileInitRequest,
@@ -201,6 +203,12 @@ def init_profile(db: Session, tenant_id: str, body: ProfileInitRequest, pack: Ru
         "enneagram": pack.version,
         "sha256": pack.sha256,
     }
+    profile["meta"]["inference_policies"] = {
+        "birth_prior_enabled": bool(effective_birth),
+        "reference_models_public": False,
+        "reference_models_may_drive_replies": False,
+    }
+    validate_profile_snapshot(profile)
     version = ProfileVersion(user_id=user.id, version_no=1, schema_version=profile["meta"]["schema_version"],
                              cold_start_rule_pack_version=pack.version, dialogue_rule_pack_version=pack.version,
                              overall_confidence=profile["meta"]["overall_confidence"], snapshot=profile)
@@ -227,20 +235,51 @@ def init_profile(db: Session, tenant_id: str, body: ProfileInitRequest, pack: Ru
     return {"request_id": req_id, "profile_version": 1, "rule_pack": _pack_summary(pack), "profile": profile, "warnings": warnings}
 
 
+def normalize_profile_snapshot(profile: dict, user: User, pack: RulePack | None = None) -> dict:
+    """Backfill fields added after older snapshots were persisted."""
+    runtime = profile.setdefault("runtime", {})
+    if not isinstance(runtime.get("interaction_preferences"), dict):
+        runtime["interaction_preferences"] = {}
+    if not isinstance(runtime.get("current_state"), dict):
+        runtime["current_state"] = {}
+    if not isinstance(runtime.get("memories"), list):
+        runtime["memories"] = []
+
+    meta = profile.setdefault("meta", {})
+    policies = meta.get("inference_policies")
+    if not isinstance(policies, dict):
+        policies = {}
+        meta["inference_policies"] = policies
+    policies.setdefault("birth_prior_enabled", bool(user.sensitive_inference_consent))
+    policies.setdefault("reference_models_public", False)
+    policies.setdefault("reference_models_may_drive_replies", False)
+
+    if not isinstance(profile.get("enneagram_profile"), dict):
+        profile["enneagram_profile"] = empty_enneagram_profile()
+    if not isinstance(profile.get("digital_code_profile"), dict):
+        birth_date = (
+            profile.get("identity", {}).get("birth_date")
+            if user.sensitive_inference_consent and policies.get("birth_prior_enabled", True)
+            else None
+        )
+        profile["digital_code_profile"] = (
+            _digital_code_context(birth_date, pack)[2]
+            if pack and birth_date else empty_digital_code_profile()
+        )
+    return profile
+
+
 def get_profile(db: Session, tenant_id: str, tenant_user_id: str) -> dict:
     user = find_user(db, tenant_id, tenant_user_id)
     version = current_version(db, user)
     profile = clone_profile(version.snapshot)
-    profile.setdefault("enneagram_profile", empty_enneagram_profile())
-    if "digital_code_profile" not in profile:
+    if not isinstance(profile.get("digital_code_profile"), dict):
         pack = db.scalar(select(RulePack).where(
             RulePack.status == "published"
         ).order_by(desc(RulePack.published_at)).limit(1))
-        birth_date = profile.get("identity", {}).get("birth_date") if user.sensitive_inference_consent else None
-        profile["digital_code_profile"] = (
-            _digital_code_context(birth_date, pack)[2]
-            if pack else empty_digital_code_profile()
-        )
+    else:
+        pack = None
+    normalize_profile_snapshot(profile, user, pack)
     now = datetime.now(timezone.utc)
     active_states = db.scalars(select(CurrentState).where(CurrentState.user_id == user.id, CurrentState.expires_at > now)).all()
     preferences = db.scalars(select(RuntimePreference).where(RuntimePreference.user_id == user.id)).all()
@@ -251,6 +290,61 @@ def get_profile(db: Session, tenant_id: str, tenant_user_id: str) -> dict:
     profile["table_view"] = build_profile_table_view(profile)
     return {"profile_version": version.version_no, "profile": profile,
             "rule_pack_versions": {"cold_start": version.cold_start_rule_pack_version, "dialogue": version.dialogue_rule_pack_version}}
+
+
+def _evidence_summary_by_path(db: Session, user: User) -> dict[str, dict[str, Any]]:
+    summaries: dict[str, dict[str, Any]] = {}
+    evidence = db.scalars(select(ProfileEvidence).where(
+        ProfileEvidence.user_id == user.id,
+        ProfileEvidence.invalidated.is_(False),
+    )).all()
+    for item in evidence:
+        summary = summaries.setdefault(item.target_path, {
+            "confirmed": 0, "explicit": 0, "repeated": 0, "observed": 0,
+            "prior": 0, "independent_sessions": 0,
+        })
+        source = item.source_type
+        if source in {"manual_expert_override", "explicit_correction"}:
+            summary["confirmed"] += 1
+        elif source == "explicit_self_report":
+            summary["explicit"] += 1
+        elif source == "repeated_behavior":
+            summary["repeated"] += 1
+        elif source == "single_behavior_inference":
+            summary["observed"] += 1
+        elif source == "cold_start_prior":
+            summary["prior"] += 1
+        session = (item.factors or {}).get("conversation_id")
+        if session:
+            summary.setdefault("_sessions", set()).add(session)
+    for summary in summaries.values():
+        sessions = summary.pop("_sessions", set())
+        summary["independent_sessions"] = len(sessions)
+    return summaries
+
+
+def get_public_profile(db: Session, tenant_id: str, tenant_user_id: str) -> dict:
+    user = find_user(db, tenant_id, tenant_user_id)
+    internal = get_profile(db, tenant_id, tenant_user_id)
+    return {
+        "profile_version": internal["profile_version"],
+        "profile": build_public_profile(internal["profile"], _evidence_summary_by_path(db, user)),
+        "rule_pack_versions": internal["rule_pack_versions"],
+    }
+
+
+def get_expert_reference(db: Session, tenant_id: str, tenant_user_id: str) -> dict:
+    internal = get_profile(db, tenant_id, tenant_user_id)
+    return {
+        "profile_version": internal["profile_version"],
+        "usage_policy": {
+            "visibility": "authorized_internal_only",
+            "may_be_presented_as_scientific_fact": False,
+            "may_drive_chat_without_independent_evidence": False,
+            "note": "类型框架、出生信息先验和原始来源只用于内部核验，不进入默认画像视图。",
+        },
+        "profile": internal["profile"],
+    }
 
 
 def _pack_summary(pack: RulePack) -> dict:
@@ -268,6 +362,294 @@ def _trait_catalog(profile: dict) -> dict[str, dict]:
     return {key: {"label": TRAIT_NAMES.get(key, key), "current_value": value["value"],
                   "current_confidence": value["confidence"]}
             for key, value in flattened_traits(profile).items()}
+
+
+def _trusted_trait_keys(db: Session, user: User) -> set[str]:
+    """Return traits backed by evidence that is independent from reference priors."""
+    summaries = _evidence_summary_by_path(db, user)
+    trusted: set[str] = set()
+    for path, summary in summaries.items():
+        if not path.startswith("core_traits."):
+            continue
+        if (summary.get("confirmed") or summary.get("explicit") or summary.get("repeated")
+                or summary.get("independent_sessions", 0) >= 3):
+            trusted.add(path.rsplit(".", 1)[-1])
+    return trusted
+
+
+def _profile_for_reply(profile: dict, trusted_traits: set[str]) -> dict:
+    """Remove reference-model influence before producing reply strategy."""
+    safe = clone_profile(profile)
+    for key, entry in flattened_traits(safe).items():
+        if key not in trusted_traits:
+            entry["value"] = 0.5
+            entry["confidence"] = 0.0
+            entry["evidence_refs"] = []
+    safe["enneagram_profile"] = empty_enneagram_profile()
+    safe.get("meta", {})["overall_confidence"] = 0.0
+    return safe
+
+
+_PREDICATE_SCENARIOS = {
+    "socializing_requires_solitude_recovery": ["energy_source"],
+    "likes_social_gathering": ["first_meeting", "energy_source"],
+    "prefers_planning": ["task_received", "task_progress"],
+    "uses_data_for_decisions": ["decision"],
+}
+
+
+def _apply_scenario_observations(
+    profile: dict,
+    frames: list[SemanticFrame],
+    accepted_records: list[tuple[TraitSignal, str]],
+    dialogue_rules: dict,
+) -> list[dict]:
+    operations: list[dict] = []
+    for signal, evidence_id in accepted_records:
+        frame = next((item for item in frames if _spans_overlap(
+            signal.supporting_span, item.supporting_span
+        )), None)
+        if not frame:
+            continue
+        configured = (
+            dialogue_rules.get("trait_mapping_rules", {}).get(signal.target_trait, {})
+            .get("affected_source_fields", {}).get("behavior_scenarios", [])
+        )
+        candidates = _PREDICATE_SCENARIOS.get(frame.predicate) or configured[:2]
+        for scenario_key in candidates:
+            target = next((
+                (group_key, scenarios[scenario_key])
+                for group_key, scenarios in profile.get("behavior_style", {}).items()
+                if scenario_key in scenarios
+            ), None)
+            if not target:
+                continue
+            group_key, item = target
+            refs = list(dict.fromkeys([*item.get("direct_evidence_refs", []), evidence_id]))
+            item["direct_evidence_refs"] = refs
+            observations = [*item.get("observations", []), {
+                "evidence_id": evidence_id,
+                "summary": signal.supporting_span,
+                "context": frame.context,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "source": signal.evidence_scope,
+            }][-8:]
+            item["observations"] = observations
+            item["confidence"] = round(max(
+                float(item.get("confidence", 0)), min(0.75, signal.confidence * 0.75)
+            ), 4)
+            item["explanation"] = "包含直接对话观察；仍需跨情境验证。"
+            operations.append({
+                "operation": "UPSERT_SCENARIO_EVIDENCE",
+                "field": f"behavior_style.{group_key}.{scenario_key}",
+                "evidence_quote": signal.supporting_span,
+            })
+    return operations
+
+
+def _apply_language_observation(profile: dict, text: str, frames: list[SemanticFrame]) -> list[dict]:
+    eligible = [
+        frame for frame in frames
+        if frame.subject == "user" and frame.modality == "asserted"
+        and frame.semantic_domain in {
+            "preference", "habit", "decision", "task_behavior", "social_behavior",
+            "relationship_behavior", "self_evaluation", "communication_behavior",
+        }
+    ]
+    if not eligible:
+        return []
+    compact = " ".join(text.split())
+    feature_candidates: list[tuple[str, str]] = []
+    if len(compact) <= 36:
+        feature_candidates.append(("concise_expression", "表达通常较简洁"))
+    elif len(compact) >= 120:
+        feature_candidates.append(("detailed_expression", "表达时会补充较多背景和细节"))
+    if any(marker in compact for marker in ("因为", "所以", "因此", "但是", "不过")):
+        feature_candidates.append(("reasoned_expression", "表达中会交代原因或转折"))
+    if any(frame.semantic_domain in {"preference", "communication_behavior"} for frame in eligible):
+        feature_candidates.append(("explicit_communication_boundary", "会明确说明希望采用的沟通方式"))
+    if not feature_candidates:
+        return []
+
+    language = profile.setdefault("language_style", {})
+    state = language.setdefault("observation_state", {})
+    speaking = language.setdefault("speaking_style", [])
+    changed_features: list[str] = []
+    for feature_id, label in feature_candidates:
+        record = state.setdefault(feature_id, {"label": label, "sample_count": 0, "examples": []})
+        record["sample_count"] = int(record.get("sample_count", 0)) + 1
+        record["examples"] = [*record.get("examples", []), compact[:120]][-3:]
+        record["updated_at"] = datetime.now(timezone.utc).isoformat()
+        changed_features.append(label)
+        if record["sample_count"] >= 3:
+            observed = next((item for item in speaking if item.get("feature_id") == feature_id), None)
+            payload = {
+                "feature_id": feature_id,
+                "label": feature_id,
+                "behavior": label,
+                "example": None,
+                "confidence": round(min(0.75, 0.2 + record["sample_count"] * 0.1), 4),
+                "evidence_refs": [],
+                "origin": "observed",
+                "sample_count": record["sample_count"],
+            }
+            if observed:
+                observed.update(payload)
+            else:
+                speaking.insert(0, payload)
+                del speaking[6:]
+    return [{
+        "operation": "UPDATE_LANGUAGE_OBSERVATION",
+        "field": "language_style.speaking_style",
+        "features": changed_features,
+    }]
+
+
+_REJECTION_REASONS = {
+    "target_not_in_published_trait_rules": "该字段不在当前已发布维护规则中",
+    "confidence_below_threshold": "候选证据强度未达到写入门槛",
+    "supporting_span_not_in_message": "候选没有可核对的用户原话",
+    "missing_matching_semantic_frame": "候选与本轮语义理解无法对应",
+    "interaction_preference_cannot_update_long_term_trait": "这是对机器人沟通方式的要求，不应改写长期行为倾向",
+    "semantic_domain_forbidden_for_long_term_trait": "短期状态、事实或事件不能直接改写长期行为倾向",
+    "no_trait_eligible_semantic_frame": "没有用户本人、明确且可用于长期观察的语义证据",
+    "explicit_self_report_requires_stable_or_habitual_frame": "这句话尚未表达稳定习惯或长期自我评价",
+    "locked_by_manual_override": "该字段已由人工确认并锁定",
+    "insufficient_independent_sessions_for_repeated_behavior": "跨对话样本还不够，暂不写入稳定倾向",
+    "effect_below_no_op_threshold": "计算后的变化低于最小有效幅度",
+}
+
+
+def _value_band(value: float) -> str:
+    if value < 0.35:
+        return "较少表现"
+    if value > 0.65:
+        return "较常表现"
+    return "视情境而定"
+
+
+def _operation_frame(operation: dict, frames: list[SemanticFrame]) -> SemanticFrame | None:
+    field_predicates = {
+        "response_length": {"prefers_short_responses"},
+        "empathy_first": {"needs_empathy_before_advice"},
+        "humor_level": {"dislikes_humor"},
+        "directness": {"prefers_direct_responses"},
+        "question_load": {"prefers_fewer_questions"},
+        "stress_level": {"high_stress"},
+        "energy_level": {"low_energy"},
+        "emotion": {"positive_mood", "low_mood", "angry_now"},
+    }
+    predicates = field_predicates.get(operation.get("field"), set())
+    if predicates:
+        return next((frame for frame in frames if frame.predicate in predicates), None)
+    if operation.get("operation") == "UPSERT_FACT":
+        return next((frame for frame in frames if frame.predicate == operation.get("key")), None)
+    if operation.get("operation") == "UPSERT_MEMORY":
+        return next((frame for frame in frames if frame.semantic_domain == "event"), None)
+    return None
+
+
+def _build_update_summary(
+    patches: list[dict],
+    runtime_operations: list[dict],
+    maintenance_operations: list[dict],
+    accepted_signals: list[dict],
+    rejected_signals: list[dict],
+    frames: list[SemanticFrame],
+    derived: list[str],
+    changed: bool,
+) -> dict:
+    items: list[dict] = []
+    for patch in patches:
+        trait_key = patch["field"].rsplit(".", 1)[-1]
+        signal = next((item for item in accepted_signals if item.get("target_trait") == trait_key), {})
+        before_band, after_band = _value_band(patch["before"]), _value_band(patch["after"])
+        direction = "小幅上调" if patch["after"] > patch["before"] else "小幅下调"
+        action = f"由“{before_band}”调整为“{after_band}”" if before_band != after_band else f"在“{after_band}”区间内{direction}"
+        scope_label = {
+            "explicit_self_report": "明确自述",
+            "repeated_behavior": "跨对话重复观察",
+            "single_behavior_inference": "单次行为观察",
+        }.get(signal.get("evidence_scope"), "对话证据")
+        items.append({
+            "kind": "stable_tendency",
+            "field": patch["field"],
+            "label": TRAIT_NAMES.get(trait_key, trait_key),
+            "action": action,
+            "why": signal.get("rationale") or "本轮原话与该行为维度直接相关",
+            "how": f"作为{scope_label}通过规则校验后，小步写入；单轮变化受上限保护。",
+            "evidence_quote": signal.get("supporting_span"),
+        })
+
+    operation_labels = {
+        "response_length": "回答长度偏好", "empathy_first": "倾听与建议顺序",
+        "humor_level": "幽默偏好", "directness": "表达直接程度",
+        "question_load": "追问密度", "stress_level": "当前压力状态",
+        "energy_level": "当前精力状态", "emotion": "当前情绪状态",
+    }
+    for operation in runtime_operations:
+        frame = _operation_frame(operation, frames)
+        op = operation.get("operation")
+        field = operation.get("field") or operation.get("key") or "memory"
+        if op == "SET_INTERACTION_PREFERENCE":
+            action, why, how = "已按用户要求更新", "用户明确提出了对回答方式的偏好", "立即写入互动偏好，不改变长期行为倾向。"
+        elif op == "SET_STATE":
+            action, why, how = "已记录为短期状态", "用户表达的是当前或近期状态", "写入带有效期的状态，到期后自动失效。"
+        elif op == "UPSERT_FACT":
+            action, why, how = "已记录或更正事实", "用户明确提供了本人事实", "作为可更正事实保存，不由此推断人格。"
+        else:
+            action, why, how = "已记录重要事件", "本轮包含用户本人事件", "写入事件记忆；重复内容会链接现有记录。"
+        items.append({
+            "kind": "runtime_or_fact",
+            "field": field,
+            "label": operation_labels.get(field, TRAIT_NAMES.get(field, field if field != "memory" else "重要事件")),
+            "action": action,
+            "why": why,
+            "how": how,
+            "evidence_quote": frame.supporting_span if frame else None,
+        })
+
+    maintenance_labels = []
+    if any(item.get("operation") == "UPSERT_SCENARIO_EVIDENCE" for item in maintenance_operations):
+        maintenance_labels.append("场景表现依据")
+    if any(item.get("operation") == "UPDATE_LANGUAGE_OBSERVATION" for item in maintenance_operations):
+        maintenance_labels.append("表达方式样本")
+
+    rejected = [{
+        "label": TRAIT_NAMES.get(item.get("target_trait"), item.get("target_trait", "画像候选")),
+        "why": _REJECTION_REASONS.get(item.get("rejection_reason"), item.get("rejection_reason", "未通过规则校验")),
+        "evidence_quote": item.get("supporting_span"),
+    } for item in rejected_signals[:4]]
+
+    if items:
+        headline = f"本轮建议已写入 {len(items)} 项可核验变化"
+        status = "updated"
+    elif maintenance_labels:
+        headline = "本轮补充了观察样本，尚未形成新的稳定结论"
+        status = "observed"
+    else:
+        headline = "本轮未修改画像"
+        status = "unchanged"
+    if not changed:
+        status = "unchanged"
+    return {
+        "status": status,
+        "headline": headline,
+        "change_count": len(items),
+        "items": items,
+        "maintenance": maintenance_labels,
+        "rejected": rejected,
+        "no_change_reason": None if changed else (
+            rejected[0]["why"] if rejected else "没有发现需要长期保存、且证据足够的用户本人信息。"
+        ),
+        "derived_effects": [
+            {"mbti_dimensions": "互动倾向概览", "behavior_style": "场景表现",
+             "language_style": "表达与沟通特点", "portrait": "当前整体观察",
+             "table_view": "画像展示索引"}.get(item, item)
+            for item in derived
+        ],
+        "guardrail_note": "只依据用户本人原话更新；短期状态与沟通偏好不会被写成人格结论。",
+    }
 
 
 def _spans_overlap(left: str, right: str) -> bool:
@@ -455,7 +837,9 @@ def _apply_runtime_frame(db: Session, user: User, profile: dict, frame: Semantic
     ), None)
     if state_spec and frame.temporal_scope in {"now", "recent", "unknown"}:
         key, spec = state_spec
-        value, hours = float(spec["value"]), int(spec["ttl_hours"])
+        raw_value = spec.get("values", {}).get(frame.predicate, spec.get("value"))
+        value = float(raw_value) if isinstance(raw_value, (int, float)) else raw_value
+        hours = int(spec.get("ttl_hours", 2))
         expires = datetime.now(timezone.utc) + timedelta(hours=hours)
         existing_state = db.scalar(select(CurrentState).where(
             CurrentState.user_id == user.id,
@@ -481,12 +865,6 @@ def _reply_hints(profile: dict, interaction_strategy: dict | None = None) -> tup
     if interaction_strategy:
         strategy_hints = interaction_strategy.get("hints", {})
         hints.update(strategy_hints)
-        hints["profile_parameter_input"] = interaction_strategy.get("profile_parameter_input", {})
-        if interaction_strategy.get("identity_status") == "confirmed":
-            hints["enneagram_strategy"] = {
-                key: value for key, value in interaction_strategy.items()
-                if key not in {"hints", "precedence", "profile_parameter_input", "behavior_directives"}
-            }
         hints["turn_plan"] = interaction_strategy.get("turn_plan", {})
         hints["strategy_precedence"] = interaction_strategy.get("precedence", [])
     if prefs.get("response_length") == "short":
@@ -495,6 +873,12 @@ def _reply_hints(profile: dict, interaction_strategy: dict | None = None) -> tup
     if prefs.get("empathy_first", 0) >= 0.67:
         hints.update(empathy_first=True, ask_support_or_solution=True)
         locked_fields.update({"empathy_first", "ask_support_or_solution"})
+    if prefs.get("directness") == "direct":
+        hints.update(answer_first=True)
+        locked_fields.add("answer_first")
+    if prefs.get("question_load") == "low":
+        hints.update(question_count=0)
+        locked_fields.add("question_count")
     if states.get("stress_level", {}).get("value", 0) >= 0.7:
         hints.update(max_sentences=3, empathy_first=True, humor_level=0.0)
         locked_fields.update({"max_sentences", "empathy_first", "question_count", "humor_level"})
@@ -536,8 +920,7 @@ def _merge_reply_guidance(profile_hints: dict, guidance: ReplyGuidance, locked_f
     for field in {"empathy_first", "answer_first", "max_sentences"} & locked_fields:
         merged[field] = profile_hints[field]
     merged["strategy_sources"] = [
-        "current_message_model_guidance", "current_profile", "runtime_state_and_preferences",
-        "enneagram_document_runtime",
+        "current_message_model_guidance", "evidence_backed_traits", "runtime_state_and_preferences",
     ]
     merged["rule_locked_fields"] = sorted(locked_fields)
     return merged
@@ -550,8 +933,8 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
         raise ConsentError("画像推断已关闭")
     version = current_version(db, user)
     _check_version(version, body.expected_profile_version)
-    before = clone_profile(version.snapshot)
-    profile = clone_profile(version.snapshot)
+    before = normalize_profile_snapshot(clone_profile(version.snapshot), user, pack)
+    profile = clone_profile(before)
     extractor = semantic_extractor or (
         get_semantic_extractor(body.model_provider)
         if body.model_provider else get_semantic_extractor()
@@ -565,6 +948,7 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
     dialogue_rules = pack.canonical_json["dialogue"]
     patches, evidence_ids, runtime_operations = [], [], []
     accepted_trait_signals, rejected_trait_signals = [], []
+    accepted_signal_records: list[tuple[TraitSignal, str]] = []
     runtime_changed = False
     for signal in analysis.trait_signals:
         patch, evidence_id, rejection = _apply_trait_signal(
@@ -579,6 +963,7 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
             patches.append(patch)
         if evidence_id:
             evidence_ids.append(evidence_id)
+            accepted_signal_records.append((signal, evidence_id))
     for frame in frames:
         changed, operations = _apply_runtime_frame(db, user, profile, frame, body.message_id, dialogue_rules)
         runtime_changed |= changed
@@ -588,12 +973,21 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
         if fact_operation:
             runtime_operations.append(fact_operation)
         if frame.semantic_domain == "event" and frame.subject == "user":
-            memory = Memory(user_id=user.id, memory_type="event", content={"summary": frame.supporting_span, "predicate": frame.predicate}, source_message_id=body.message_id)
-            db.add(memory)
-            db.flush()
-            profile["runtime"]["memories"].append({"memory_id": memory.id, "type": "event", **memory.content})
-            runtime_changed = True
-            runtime_operations.append({"operation": "UPSERT_MEMORY", "memory_id": memory.id})
+            existing_event = next((item for item in db.scalars(select(Memory).where(
+                Memory.user_id == user.id,
+                Memory.memory_type == "event",
+                Memory.active.is_(True),
+            )).all() if item.content.get("predicate") == frame.predicate
+                and item.content.get("summary") == frame.supporting_span), None)
+            if not existing_event:
+                memory = Memory(user_id=user.id, memory_type="event", content={
+                    "summary": frame.supporting_span, "predicate": frame.predicate,
+                }, source_message_id=body.message_id)
+                db.add(memory)
+                db.flush()
+                profile["runtime"]["memories"].append({"memory_id": memory.id, "type": "event", **memory.content})
+                runtime_changed = True
+                runtime_operations.append({"operation": "UPSERT_MEMORY", "memory_id": memory.id})
 
     update_math = dialogue_rules.get("update_math", {})
     maximum_total_change = float(update_math.get("maximum_total_trait_change_per_turn", 0.10))
@@ -611,11 +1005,16 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
     else:
         derived = []
         recalculate_meta(profile)
-    changed = material_trait_change or runtime_changed
+    maintenance_operations = _apply_scenario_observations(
+        profile, frames, accepted_signal_records, dialogue_rules,
+    )
+    maintenance_operations.extend(_apply_language_observation(profile, body.text, frames))
+    changed = material_trait_change or runtime_changed or bool(maintenance_operations)
     new_no = version.version_no + 1 if changed else version.version_no
     if changed:
         profile["meta"]["profile_version"] = new_no
         profile["meta"]["rule_pack_versions"] = {"cold_start": version.cold_start_rule_pack_version, "dialogue": pack.version, "sha256": pack.sha256}
+        validate_profile_snapshot(profile)
         db.add(ProfileVersion(user_id=user.id, version_no=new_no, schema_version=profile["meta"]["schema_version"],
             cold_start_rule_pack_version=version.cold_start_rule_pack_version, dialogue_rule_pack_version=pack.version,
             overall_confidence=profile["meta"]["overall_confidence"], snapshot=profile))
@@ -627,27 +1026,40 @@ def ingest_message(db: Session, tenant_id: str, tenant_user_id: str, body: Messa
         e = db.get(ProfileEvidence, evidence_id)
         evidence_response.append({"evidence_id": e.id, "source_type": e.source_type, "target_path": e.target_path,
                                   "direction": e.direction, "impact": round(e.base_delta * e.impact, 4), "reason": e.reason})
+    trusted_traits = _trusted_trait_keys(db, user)
+    strategy_profile = _profile_for_reply(profile, trusted_traits)
     interaction_strategy = resolve_interaction_strategy(
-        profile,
+        strategy_profile,
         pack.canonical_json.get("enneagram", {}),
         body.context.topic,
         current_message=body.text,
         semantic_frames=[frame.model_dump() for frame in frames],
         reply_guidance=analysis.reply_guidance.model_dump(),
     )
-    profile_hints, locked_fields = _reply_hints(profile, interaction_strategy)
+    interaction_strategy["strategy_sources"] = [
+        "current_message", "runtime_state_and_preferences", "evidence_backed_traits",
+        *(["generic_scene_rules"] if interaction_strategy.get("scene") else []),
+    ]
+    profile_hints, locked_fields = _reply_hints(strategy_profile, interaction_strategy)
     reply_hints = _merge_reply_guidance(profile_hints, analysis.reply_guidance, locked_fields)
+    update_summary = _build_update_summary(
+        patches, runtime_operations, maintenance_operations, accepted_trait_signals,
+        rejected_trait_signals, frames, derived, changed,
+    )
     return {"request_id": req_id, "profile_version": new_no, "rule_pack": _pack_summary(pack),
             "semantic_extractor_version": extractor.version, "semantic_frames": [f.model_dump() for f in frames], "evidence": evidence_response,
             "candidate_trait_signals": [signal.model_dump() for signal in analysis.trait_signals],
             "accepted_trait_signals": accepted_trait_signals, "rejected_trait_signals": rejected_trait_signals,
-            "profile_patch": patches, "runtime_operations": runtime_operations, "derived_patch": derived,
+            "profile_patch": patches, "runtime_operations": runtime_operations,
+            "maintenance_operations": maintenance_operations, "derived_patch": derived,
+            "update_summary": update_summary,
             "model_reply_guidance": analysis.reply_guidance.model_dump(), "reply_hints": reply_hints,
             "behavior_directives": interaction_strategy.get("behavior_directives", {}),
             "strategy_trace": {"semantic_analysis": extractor.version, "profile_version_used": new_no,
                                "candidate_signals": len(analysis.trait_signals),
                                "accepted_signals": len(accepted_trait_signals),
-                               "enneagram_identity": profile.get("enneagram_profile", {}).get("identity", {}).get("code"),
+                               "trusted_trait_inputs": sorted(trusted_traits),
+                               "reference_models_excluded": ["digital_code", "mbti", "enneagram", "birth_analysis"],
                                "scene": interaction_strategy.get("scene") if interaction_strategy else None,
                                "strategy_sources": interaction_strategy.get("strategy_sources", []),
                                "consumed_by_chatbot": False},
@@ -699,8 +1111,8 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
     is_core_trait = body.target_path.startswith("core_traits.") and len(body.target_path.split(".")) == 3
     if not is_core_trait and body.target_path not in allowed_identity_paths:
         raise ValueError("只允许更正核心维度或姓名、生日、出生时间、时区等底层身份事实")
-    before = clone_profile(version.snapshot)
-    profile = clone_profile(version.snapshot)
+    before = normalize_profile_snapshot(clone_profile(version.snapshot), user, pack)
+    profile = clone_profile(before)
     parent, key = _resolve_path(profile, body.target_path)
     old = parent[key]
     before_value = clone_profile(old) if isinstance(old, dict) else old
@@ -731,7 +1143,8 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
                 ProfileEvidence.source_type == "cold_start_prior", ProfileEvidence.invalidated.is_(False))):
             evidence.invalidated = True; evidence.invalidated_at = datetime.now(timezone.utc); invalidated.append(evidence.id)
         birth_key = corrected_date.isoformat()
-        code, signals, digital_code_profile, trait_priors = _digital_code_context(birth_key, pack)
+        inference_birth_key = birth_key if user.sensitive_inference_consent else None
+        code, signals, digital_code_profile, trait_priors = _digital_code_context(inference_birth_key, pack)
         signals_by_trait: dict[str, list[dict]] = {}
         for signal in signals:
             signals_by_trait.setdefault(signal["target"], []).append(signal)
@@ -739,8 +1152,8 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
             for trait_key, entry in category.items():
                 entry["evidence_refs"] = [ref for ref in entry["evidence_refs"] if ref not in invalidated]
                 if not entry["evidence_refs"]:
-                    value = GOLDEN_TRAITS.get(birth_key, {}).get(trait_key, trait_priors.get(trait_key, 0.5))
-                    has_prior = trait_key in GOLDEN_TRAITS.get(birth_key, {}) or trait_key in trait_priors
+                    value = GOLDEN_TRAITS.get(inference_birth_key or "", {}).get(trait_key, trait_priors.get(trait_key, 0.5))
+                    has_prior = trait_key in GOLDEN_TRAITS.get(inference_birth_key or "", {}) or trait_key in trait_priors
                     entry.update(value=value, confidence=0.35 if has_prior else 0.1)
                     if has_prior:
                         evidence = ProfileEvidence(
@@ -756,12 +1169,26 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
                         db.add(evidence); db.flush(); entry["evidence_refs"].append(evidence.id); evidence_ids.append(evidence.id)
         user.birth_date = corrected_date
         parent[key] = corrected_date.isoformat()
-        _, warnings = BirthFeatureCalculator().calculate(birth_key)
+        _, warnings = BirthFeatureCalculator().calculate(birth_key) if inference_birth_key else (
+            None, ["生日仅作为事实保存；未授权出生信息推断。"]
+        )
+        profile["birth_analysis"].update({
+            "bazi_text": None, "day_master": None, "pattern_name": None,
+            "strength_label": None,
+            "relation_markers": {
+                "combinations": 0, "self_punishments": 0, "other_punishments": 0,
+                "clashes": 0, "harms": 0, "source_text": None,
+            },
+        })
         profile["birth_analysis"]["numerology_code"] = code
         profile["digital_code_profile"] = digital_code_profile
+        profile.pop("source_profile_document", None)
+        profile.pop("source_portrait", None)
+        profile.get("identity", {}).pop("template_person_id", None)
         profile["meta"]["warnings"] = warnings
+        profile.setdefault("meta", {}).setdefault("inference_policies", {})["birth_prior_enabled"] = bool(inference_birth_key)
         derived = rebuild_derived(profile, pack.canonical_json["schema"])
-        corrected_template = template_person_for_birth_date(corrected_date.isoformat())
+        corrected_template = template_person_for_birth_date(corrected_date.isoformat()) if inference_birth_key else None
         if corrected_template:
             apply_source_profile(profile, corrected_date.isoformat())
             profile["mbti_dimensions"]["type_label"] = corrected_template.mbti
@@ -799,6 +1226,7 @@ def correct_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Corr
     new_no = version.version_no + 1
     profile["meta"]["profile_version"] = new_no
     recalculate_meta(profile)
+    validate_profile_snapshot(profile)
     db.add(ProfileVersion(user_id=user.id, version_no=new_no, schema_version=profile["meta"]["schema_version"],
         cold_start_rule_pack_version=version.cold_start_rule_pack_version, dialogue_rule_pack_version=pack.version,
         overall_confidence=profile["meta"]["overall_confidence"], snapshot=profile))
@@ -823,8 +1251,8 @@ def set_enneagram_profile(
         raise ConsentError("保存九型人格结构需要敏感推断授权")
     version = current_version(db, user)
     _check_version(version, body.expected_profile_version)
-    before = clone_profile(version.snapshot)
-    profile = clone_profile(version.snapshot)
+    before = normalize_profile_snapshot(clone_profile(version.snapshot), user, pack)
+    profile = clone_profile(before)
     previous = profile.get("enneagram_profile") or empty_enneagram_profile()
     for item in db.scalars(select(ProfileEvidence).where(
         ProfileEvidence.user_id == user.id,
@@ -867,6 +1295,7 @@ def set_enneagram_profile(
     profile["meta"]["rule_pack_versions"]["enneagram"] = pack.version
     profile["meta"]["rule_pack_versions"]["sha256"] = pack.sha256
     recalculate_meta(profile)
+    validate_profile_snapshot(profile)
     db.add(ProfileVersion(
         user_id=user.id,
         version_no=new_no,
@@ -902,7 +1331,8 @@ def forget_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Forge
                    req_id: str, idem_key: str) -> dict:
     user = find_user(db, tenant_id, tenant_user_id)
     version = current_version(db, user); _check_version(version, body.expected_profile_version)
-    before = clone_profile(version.snapshot); profile = clone_profile(version.snapshot)
+    before = normalize_profile_snapshot(clone_profile(version.snapshot), user, pack)
+    profile = clone_profile(before)
     affected: list[str] = []
     if body.scope == "memory":
         item = db.get(Memory, body.target_id)
@@ -926,12 +1356,50 @@ def forget_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Forge
     elif body.scope == "birth_inference":
         for item in db.scalars(select(ProfileEvidence).where(ProfileEvidence.user_id == user.id, ProfileEvidence.source_type == "cold_start_prior", ProfileEvidence.invalidated.is_(False))):
             item.invalidated = True; item.invalidated_at = datetime.now(timezone.utc); affected.append(item.id)
-        for category in profile["core_traits"].values():
-            for entry in category.values():
-                if any(ref in affected for ref in entry["evidence_refs"]):
-                    entry.update(value=0.5, confidence=0.1, evidence_refs=[r for r in entry["evidence_refs"] if r not in affected])
-        profile["birth_analysis"]["numerology_code"] = None
+        active_non_prior = db.scalars(select(ProfileEvidence).where(
+            ProfileEvidence.user_id == user.id,
+            ProfileEvidence.source_type != "cold_start_prior",
+            ProfileEvidence.invalidated.is_(False),
+        ).order_by(ProfileEvidence.created_at)).all()
+        evidence_by_target: dict[str, list[ProfileEvidence]] = {}
+        for item in active_non_prior:
+            evidence_by_target.setdefault(item.target_path, []).append(item)
+        active_overrides = {
+            item.target_path: item for item in db.scalars(select(ManualOverride).where(
+                ManualOverride.user_id == user.id, ManualOverride.active.is_(True),
+            )).all()
+        }
+        for category_key, category in profile["core_traits"].items():
+            for trait_key, entry in category.items():
+                path = f"core_traits.{category_key}.{trait_key}"
+                refs = evidence_by_target.get(path, [])
+                value, confidence = 0.5, 0.1
+                for evidence in refs:
+                    value = min(1.0, max(0.0, value + evidence.direction * evidence.base_delta * evidence.impact))
+                    confidence = 1 - (1 - confidence) * (1 - min(1.0, abs(evidence.impact)))
+                if path in active_overrides:
+                    value = float(active_overrides[path].value.get("value", value))
+                    confidence = 1.0
+                entry.update(
+                    value=round(value, 4), confidence=round(confidence, 4),
+                    evidence_refs=[item.id for item in refs],
+                    updated_at=datetime.now(timezone.utc).isoformat(),
+                )
+        profile["birth_analysis"] = {
+            "bazi_text": None, "day_master": None, "pattern_name": None,
+            "strength_label": None,
+            "relation_markers": {
+                "combinations": 0, "self_punishments": 0, "other_punishments": 0,
+                "clashes": 0, "harms": 0, "source_text": None,
+            },
+            "numerology_code": None,
+            "algorithm_version": BirthFeatureCalculator.algorithm_version,
+        }
         profile["digital_code_profile"] = empty_digital_code_profile()
+        profile.pop("source_profile_document", None)
+        profile.pop("source_portrait", None)
+        profile.get("identity", {}).pop("template_person_id", None)
+        profile.setdefault("meta", {}).setdefault("inference_policies", {})["birth_prior_enabled"] = False
         rebuild_derived(profile, pack.canonical_json["schema"])
     elif body.scope == "enneagram":
         for item in db.scalars(select(ProfileEvidence).where(
@@ -945,31 +1413,47 @@ def forget_profile(db: Session, tenant_id: str, tenant_user_id: str, body: Forge
         profile["enneagram_profile"] = empty_enneagram_profile()
         profile["enneagram_profile"]["parameter_input"] = build_portrait_parameter_input(profile)
     else:
-        user.inference_enabled = False
-        user.profile_consent = False
-        user.sensitive_inference_consent = False
-        for item in db.scalars(select(ProfileEvidence).where(ProfileEvidence.user_id == user.id, ProfileEvidence.invalidated.is_(False))):
-            item.invalidated = True; item.invalidated_at = datetime.now(timezone.utc); affected.append(item.id)
-        for item in db.scalars(select(Memory).where(Memory.user_id == user.id, Memory.active.is_(True))):
-            item.active = False; affected.append(item.id)
+        affected.extend(item.id for item in db.scalars(select(ProfileEvidence).where(
+            ProfileEvidence.user_id == user.id,
+        )).all())
+        affected.extend(item.id for item in db.scalars(select(Memory).where(
+            Memory.user_id == user.id,
+        )).all())
+        db.execute(delete(ProfileEvidence).where(ProfileEvidence.user_id == user.id))
+        db.execute(delete(Memory).where(Memory.user_id == user.id))
         db.execute(delete(CurrentState).where(CurrentState.user_id == user.id))
         db.execute(delete(RuntimePreference).where(RuntimePreference.user_id == user.id))
         db.execute(delete(ManualOverride).where(ManualOverride.user_id == user.id))
-        for category in profile["core_traits"].values():
-            for entry in category.values():
-                entry.update(value=0.5, confidence=0.1, evidence_refs=[])
-        profile["runtime"] = {"interaction_preferences": {}, "current_state": {}, "memories": []}
-        profile["birth_analysis"]["numerology_code"] = None
-        profile["digital_code_profile"] = empty_digital_code_profile()
-        profile["enneagram_profile"] = empty_enneagram_profile()
-        profile.pop("source_portrait", None)
-        profile.pop("source_profile_document", None)
-        rebuild_derived(profile, pack.canonical_json["schema"])
-        profile["meta"]["warnings"] = ["画像推断已关闭，历史证据与记忆已失效。"]
-    new_no = version.version_no + 1; profile["meta"]["profile_version"] = new_no; recalculate_meta(profile)
+        db.execute(delete(ProfileVersion).where(ProfileVersion.user_id == user.id))
+        db.execute(delete(AuditLog).where(AuditLog.user_id == user.id))
+        conversation_ids = select(Conversation.id).where(Conversation.user_id == user.id)
+        db.execute(update(ChatMessage).where(
+            ChatMessage.conversation_id.in_(conversation_ids)
+        ).values(engine_trace=None, profile_version=None))
+        user.inference_enabled = False
+        user.profile_consent = False
+        user.sensitive_inference_consent = False
+        user.display_name = None
+        user.birth_date = None
+        user.birth_time = None
+        user.timezone_name = None
+        profile, _ = build_initial_profile(
+            user.id, None, None, None, pack.canonical_json, {}, None, {},
+        )
+        profile["meta"]["warnings"] = ["画像内容已清除；画像推断和敏感参考模型均已关闭。"]
+        profile["meta"]["inference_policies"] = {
+            "birth_prior_enabled": False,
+            "reference_models_public": False,
+            "reference_models_may_drive_replies": False,
+        }
+    new_no = 1 if body.scope == "all_profile" else version.version_no + 1
+    profile["meta"]["profile_version"] = new_no
+    recalculate_meta(profile)
+    validate_profile_snapshot(profile)
     db.add(ProfileVersion(user_id=user.id, version_no=new_no, schema_version=profile["meta"]["schema_version"],
-        cold_start_rule_pack_version=version.cold_start_rule_pack_version, dialogue_rule_pack_version=pack.version,
+        cold_start_rule_pack_version=(pack.version if body.scope == "all_profile" else version.cold_start_rule_pack_version), dialogue_rule_pack_version=pack.version,
         overall_confidence=profile["meta"]["overall_confidence"], snapshot=profile))
-    _audit(db, req_id, tenant_id, f"profile.forget.{body.scope}", user, before, profile, affected, ["USER-FORGET"], idem_key)
+    audit_before = {"redacted": True, "reason": "all_profile_forget"} if body.scope == "all_profile" else before
+    _audit(db, req_id, tenant_id, f"profile.forget.{body.scope}", user, audit_before, profile, affected, ["USER-FORGET"], idem_key)
     db.commit()
     return {"request_id": req_id, "profile_version": new_no, "scope": body.scope, "affected_ids": affected, "rule_pack": _pack_summary(pack)}

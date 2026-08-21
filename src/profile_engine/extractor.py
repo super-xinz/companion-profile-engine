@@ -27,8 +27,13 @@ PREDICATES = [
     ("uses_data_for_decisions", ("数据列出来", "看数据", "依据数据"), (), "decision"),
     ("needs_empathy_before_advice", ("别一上来给建议", "先听我", "先安慰", "听我把话说完"), (), "preference"),
     ("prefers_short_responses", ("回答短一点", "说短一点", "简短一点", "别太长"), (), "preference"),
+    ("prefers_direct_responses", ("直接一点", "先说结论", "别绕弯", "不要绕弯"), (), "preference"),
+    ("prefers_fewer_questions", ("少问一点", "别总问我", "不要追问", "别一直追问"), (), "preference"),
     ("low_energy", ("很累", "没精力", "精疲力尽", "只想休息"), (), "emotion"),
     ("high_stress", ("压力很大", "焦虑", "快崩溃", "很紧张"), (), "emotion"),
+    ("positive_mood", ("心情很好", "很开心", "特别开心"), (), "emotion"),
+    ("low_mood", ("心情低落", "很难过", "很沮丧"), (), "emotion"),
+    ("angry_now", ("很生气", "很愤怒", "气死我了"), (), "emotion"),
     ("dislikes_humor", ("别开玩笑", "不要幽默", "不喜欢玩笑"), (), "preference"),
 ]
 
@@ -121,8 +126,13 @@ predicate 是机器可读的英文标识。遇到下列含义时必须使用对�
 - 用数据辅助决定：uses_data_for_decisions
 - 希望先共情、倾听再建议：needs_empathy_before_advice
 - 希望回复简短：prefers_short_responses
+- 希望先说结论、表达更直接：prefers_direct_responses
+- 希望减少追问：prefers_fewer_questions
 - 当前疲惫或没精力：low_energy
 - 当前压力大或焦虑：high_stress
+- 当前心情较好：positive_mood
+- 当前难过或低落：low_mood
+- 当前生气：angry_now
 - 不喜欢玩笑或幽默：dislikes_humor
 其他含义也使用简短 snake_case 英文标识，不要用中文自然语言作 predicate。
 identity_fact 建议使用 name、education_institution、education_status、occupation、location 等稳定 predicate，并把事实值放在 object。

@@ -20,12 +20,14 @@ from .models import (AuditLog, ChatMessage, Conversation, ManualOverride, Memory
                      ProfileEvidence, ProfileVersion, RulePack, RuleRevision,
                      TeamMember, User)
 from .model_gateway import public_model_options
-from .profile import TRAIT_NAMES, clone_profile, flattened_traits, rebuild_derived, recalculate_meta
+from .profile import (TRAIT_NAMES, clone_profile, flattened_traits, rebuild_derived,
+                      recalculate_meta, validate_profile_snapshot)
 from .rule_compiler import UniqueKeyLoader, validate_rule_references
 from .schemas import (Consent, EnneagramIdentityInput, ProfileInitRequest,
                       SetEnneagramRequest)
 from .service import (_audit, _resolve_path, current_version, explain_profile, find_user,
-                      get_profile, init_profile, set_enneagram_profile)
+                      get_expert_reference, get_profile, get_public_profile, init_profile,
+                      normalize_profile_snapshot, set_enneagram_profile)
 from .template_people import TEMPLATE_PEOPLE
 
 
@@ -181,8 +183,6 @@ def _person_view(db: Session, user: User) -> dict:
         "display_name": user.display_name or "未命名人物",
         "birth_date": user.birth_date.isoformat() if user.birth_date else None,
         "profile_version": version.version_no,
-        "overall_confidence": profile.get("meta", {}).get("overall_confidence", 0),
-        "mbti": profile.get("mbti_dimensions", {}).get("type_label", "XXXX"),
         "conversation_count": conversations,
         "updated_at": _iso(last_conversation.updated_at if last_conversation else user.updated_at),
     }
@@ -316,20 +316,21 @@ def create_person(body: PersonCreate, request: Request, tenant_id: str = Depends
         db, tenant_id,
         ProfileInitRequest(tenant_user_id=user_id, display_name=body.display_name, birth_date=body.birth_date,
                            timezone="Asia/Shanghai", enneagram=body.enneagram,
-                           consent=Consent(profile=True, sensitive_inference=True)),
+                           consent=Consent(profile=True, sensitive_inference=body.enneagram is not None)),
         _current_pack(request, db), request.state.request_id, f"workspace-create-{user_id}",
     )
     user = find_user(db, tenant_id, user_id)
     conversation = _ensure_conversation(db, user)
     db.commit()
+    public = get_public_profile(db, tenant_id, user_id)
     return {"person": _person_view(db, user), "conversation": _conversation_view(db, conversation),
-            "profile": response["profile"]}
+            "profile": public["profile"], "profile_version": public["profile_version"]}
 
 
 @router.get("/people/{user_id}")
 def person_detail(user_id: str, tenant_id: str = Depends(demo_auth), db: Session = Depends(get_db)) -> dict:
     user = find_user(db, tenant_id, user_id)
-    profile = get_profile(db, tenant_id, user_id)
+    profile = get_public_profile(db, tenant_id, user_id)
     conversations = db.scalars(select(Conversation).where(
         Conversation.user_id == user.id, Conversation.status == "active"
     ).order_by(desc(Conversation.updated_at))).all()
@@ -345,6 +346,18 @@ def person_detail(user_id: str, tenant_id: str = Depends(demo_auth), db: Session
             "reason": item.reason, "created_by": item.created_by, "updated_at": _iso(item.updated_at),
         } for item in overrides],
     }
+
+
+@router.get("/people/{user_id}/expert-reference")
+def expert_reference(
+    user_id: str,
+    tenant_id: str = Depends(demo_auth),
+    x_actor_name: str | None = Header(default=None, alias="X-Actor-Name"),
+    db: Session = Depends(get_db),
+) -> dict:
+    actor = _actor(x_actor_name)
+    _require(db, tenant_id, actor, "profile.edit")
+    return get_expert_reference(db, tenant_id, user_id)
 
 
 @router.post("/people/{user_id}/conversations")
@@ -392,19 +405,37 @@ def profile_explain(user_id: str, field: str | None = None, tenant_id: str = Dep
                     db: Session = Depends(get_db)) -> dict:
     user = find_user(db, tenant_id, user_id)
     explanation = explain_profile(db, tenant_id, user_id, field)
+    evidence_keys = ("supporting_evidence", "counter_evidence", "invalidated_evidence")
+    hidden_reference_evidence_count = 0
+    for key in evidence_keys:
+        visible = []
+        for item in explanation[key]:
+            source = item.get("source_type", "")
+            is_internal_reference = source == "cold_start_prior" or source.startswith("enneagram_")
+            if is_internal_reference:
+                hidden_reference_evidence_count += 1
+            else:
+                visible.append(item)
+        explanation[key] = visible
+    explanation["version_history"] = [
+        {"version": item["version"], "created_at": item["created_at"]}
+        for item in explanation["version_history"]
+    ]
     audits = db.scalars(select(AuditLog).where(
         AuditLog.tenant_id == tenant_id, AuditLog.user_id == user.id
     ).order_by(desc(AuditLog.created_at)).limit(60)).all()
     memories = db.scalars(select(Memory).where(Memory.user_id == user.id).order_by(desc(Memory.updated_at))).all()
     return {
         **explanation,
+        "hidden_reference_evidence_count": hidden_reference_evidence_count,
+        "evidence_visibility_note": "出生信息先验和类型框架依据已隔离到授权专家参考，不计入默认画像证据。",
         "memories": [{
             "memory_id": item.id, "type": item.memory_type, "content": item.content,
             "active": item.active, "updated_at": _iso(item.updated_at),
         } for item in memories],
         "audit_log": [{
             "id": item.id, "action": item.action, "actor": item.actor,
-            "before": item.before, "after": item.after, "created_at": _iso(item.created_at),
+            "created_at": _iso(item.created_at),
         } for item in audits],
     }
 
@@ -418,13 +449,14 @@ def manual_edit(user_id: str, body: ManualEditRequest, request: Request,
     _require(db, tenant_id, actor, "profile.edit")
     user = find_user(db, tenant_id, user_id)
     version = current_version(db, user)
+    active_pack = _current_pack(request, db)
     if version.version_no != body.expected_profile_version:
         raise HTTPException(status_code=409, detail=f"画像已更新为 v{version.version_no}，请刷新后重试")
     is_core_trait = body.target_path.startswith("core_traits.") and len(body.target_path.split(".")) == 3
     if not is_core_trait and body.target_path != "identity.display_name":
         raise HTTPException(status_code=422, detail="只允许维护核心维度或人物姓名")
-    before = clone_profile(version.snapshot)
-    profile = clone_profile(version.snapshot)
+    before = normalize_profile_snapshot(clone_profile(version.snapshot), user, active_pack)
+    profile = clone_profile(before)
     try:
         parent, key = _resolve_path(profile, body.target_path)
     except ValueError as exc:
@@ -448,7 +480,7 @@ def manual_edit(user_id: str, body: ManualEditRequest, request: Request,
         entry.update(value=applied, confidence=1.0, evidence_refs=[*entry.get("evidence_refs", []), evidence.id],
                      updated_at=datetime.now(timezone.utc).isoformat(),
                      interpretation=f"由 {actor} 人工确认：{body.reason}")
-        rebuild_derived(profile, _current_pack(request, db).canonical_json["schema"])
+        rebuild_derived(profile, active_pack.canonical_json["schema"])
         evidence_refs = [evidence.id]
     else:
         if not isinstance(body.value, str) or not body.value.strip() or len(body.value) > 256:
@@ -470,10 +502,11 @@ def manual_edit(user_id: str, body: ManualEditRequest, request: Request,
                               reason=body.reason, created_by=actor))
     new_no = version.version_no + 1
     profile["meta"]["profile_version"] = new_no
+    validate_profile_snapshot(profile)
     db.add(ProfileVersion(
         user_id=user.id, version_no=new_no, schema_version=profile["meta"]["schema_version"],
         cold_start_rule_pack_version=version.cold_start_rule_pack_version,
-        dialogue_rule_pack_version=_current_pack(request, db).version,
+        dialogue_rule_pack_version=active_pack.version,
         overall_confidence=profile["meta"]["overall_confidence"], snapshot=profile,
     ))
     _audit(db, request.state.request_id, tenant_id, "profile.manual_override", user, before, profile,

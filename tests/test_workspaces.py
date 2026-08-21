@@ -72,7 +72,18 @@ def test_multi_person_profile_and_rule_workspaces():
             for user_id, expected_code in (("person-1989-11-28", "SX/SO｜7w8"), ("person-1996-03-28", "SO/SX｜2w1")):
                 detail = client.get(f"/demo/api/people/{user_id}", headers=headers)
                 assert detail.status_code == 200, detail.text
-                assert detail.json()["profile"]["enneagram_profile"]["identity"]["code"] == expected_code
+                assert "enneagram_profile" not in detail.json()["profile"]
+                audit = client.get(f"/demo/api/people/{user_id}/profile-explain", headers=headers)
+                assert audit.status_code == 200, audit.text
+                assert audit.json()["hidden_reference_evidence_count"] > 0
+                assert all(
+                    item["source_type"] != "cold_start_prior"
+                    for key in ("supporting_evidence", "counter_evidence", "invalidated_evidence")
+                    for item in audit.json()[key]
+                )
+                expert = client.get(f"/demo/api/people/{user_id}/expert-reference", headers=headers)
+                assert expert.status_code == 200, expert.text
+                assert expert.json()["profile"]["enneagram_profile"]["identity"]["code"] == expected_code
 
             with SessionLocal() as db:
                 target = db.scalar(select(ProfileVersion).where(
@@ -91,7 +102,9 @@ def test_multi_person_profile_and_rule_workspaces():
             assert refreshed.status_code == 200, refreshed.text
             restored = client.get("/demo/api/people/person-1996-03-28", headers=headers)
             assert restored.status_code == 200, restored.text
-            assert restored.json()["profile"]["enneagram_profile"]["identity"]["code"] == "SO/SX｜2w1"
+            assert "enneagram_profile" not in restored.json()["profile"]
+            restored_expert = client.get("/demo/api/people/person-1996-03-28/expert-reference", headers=headers)
+            assert restored_expert.json()["profile"]["enneagram_profile"]["identity"]["code"] == "SO/SX｜2w1"
 
             disabled_template_id = "person-1988-08-09"
             with SessionLocal() as db:
@@ -141,8 +154,11 @@ def test_multi_person_profile_and_rule_workspaces():
             detail = client.get(f"/demo/api/people/{person['user_id']}", headers=headers)
             assert detail.status_code == 200, detail.text
             assert detail.json()["person"]["conversation_count"] == 1
-            assert detail.json()["profile"]["enneagram_profile"]["identity"]["code"] == "SX/SO｜7w6"
-            trait = detail.json()["profile"]["core_traits"]["energy_mode"]["extroversion"]["value"]
+            assert "digital_code_profile" not in detail.json()["profile"]
+            assert "enneagram_profile" not in detail.json()["profile"]
+            expert = client.get(f"/demo/api/people/{person['user_id']}/expert-reference", headers=headers).json()
+            assert expert["profile"]["enneagram_profile"]["identity"]["code"] == "SX/SO｜7w6"
+            trait = expert["profile"]["core_traits"]["energy_mode"]["extroversion"]["value"]
             edited = client.post(f"/demo/api/people/{person['user_id']}/manual-edit", headers=headers, json={
                 "expected_profile_version": detail.json()["profile_version"],
                 "target_path": "core_traits.energy_mode.extroversion",

@@ -225,6 +225,54 @@ def test_dialogue_state_machine_idempotency_and_isolation():
         assert conflict.status_code == 409
 
 
+def test_one_call_chat_auto_initializes_updates_profile_and_is_idempotent(monkeypatch):
+    user = f"chat-{uuid.uuid4().hex}"
+    calls = {"model": 0}
+
+    def generate_reply(*_args, **_kwargs):
+        calls["model"] += 1
+        return "明白，我会简短一点，先听你说完。", "deepseek:test-model"
+
+    monkeypatch.setattr("profile_engine.api._generate_reply", generate_reply)
+    payload = {
+        "user_id": user,
+        "conversation_id": "customer-conversation-1",
+        "message_id": "customer-message-1",
+        "text": "以后回答短一点，先听我把话说完。",
+        "initialize": {
+            "display_name": "API 用户",
+            "consent": {"profile": True, "sensitive_inference": False},
+        },
+    }
+    headers = idem(f"chat-{user}-1")
+    with TestClient(app) as client:
+        first = client.post("/v1/chat", headers=headers, json=payload)
+        assert first.status_code == 200, first.text
+        body = first.json()
+        assert body["reply"] == "明白，我会简短一点，先听你说完。"
+        assert body["profile_created"] is True
+        assert body["profile_version"] == 2
+        assert body["reply_hints"]["max_sentences"] == 3
+        assert body["changes"]["runtime_operations"]
+        assert "engine" not in body
+
+        retry = client.post("/v1/chat", headers=headers, json=payload)
+        assert retry.status_code == 200
+        assert retry.json() == body
+        assert calls["model"] == 1
+
+        follow_up = client.post("/v1/chat", headers=idem(f"chat-{user}-2"), json={
+            "user_id": user,
+            "conversation_id": "customer-conversation-1",
+            "message_id": "customer-message-2",
+            "text": "我今天很累，没什么精力。",
+        })
+        assert follow_up.status_code == 200, follow_up.text
+        assert follow_up.json()["profile_created"] is False
+        assert follow_up.json()["profile_version"] == 3
+        assert calls["model"] == 2
+
+
 def test_idempotency_key_is_bound_to_method_path_resource_and_body():
     user_a = f"idem-a-{uuid.uuid4().hex}"
     user_b = f"idem-b-{uuid.uuid4().hex}"

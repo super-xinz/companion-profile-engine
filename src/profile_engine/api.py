@@ -19,19 +19,22 @@ from sqlalchemy.orm import Session
 from . import __version__
 from .config import get_settings
 from .db import SessionLocal, get_db, init_db
-from .demo import router as demo_router
+from .demo import (ModelNoResponseError, _generate_reply,
+                   router as demo_router)
 from .workspace import router as workspace_router
-from .models import AuditLog, IdempotencyRecord, RulePack, User
-from .extractor import SemanticExtractorError
+from .models import (AuditLog, ChatMessage, Conversation, IdempotencyRecord,
+                     RulePack, User)
+from .extractor import DeterministicSemanticExtractor, SemanticExtractorError
 from .model_gateway import public_model_options
 from .rule_compiler import compile_rule_pack
 from .security import SlidingWindowRateLimiter, constant_time_equal, safe_request_id
-from .schemas import (Consent, CorrectionRequest, DeleteProfileRequest, ForgetRequest,
-                      MessageIngestRequest, ProfileInitRequest, ResetProfileRequest,
-                      SetEnneagramRequest)
+from .schemas import (ChatRequest, Consent, CorrectionRequest, DeleteProfileRequest,
+                      ForgetRequest, MessageIngestRequest, ProfileInitRequest,
+                      ResetProfileRequest, SetEnneagramRequest)
 from .service import (ConsentError, NotFoundError, VersionConflictError, correct_profile,
                       current_version, ensure_rule_pack, explain_profile, forget_profile, get_profile,
-                      ingest_message, init_profile, request_id, set_enneagram_profile)
+                      get_public_profile, ingest_message, init_profile, request_id,
+                      set_enneagram_profile)
 from .workspace import _sync_template_people
 
 
@@ -343,6 +346,12 @@ def read_profile(user_id: str, tenant_id: str = Depends(auth_context), db: Sessi
     return get_profile(db, tenant_id, user_id)
 
 
+@app.get("/v1/public-profiles/{user_id}", tags=["profiles"], summary="读取对外画像视图")
+def read_public_profile(user_id: str, tenant_id: str = Depends(auth_context),
+                        db: Session = Depends(get_db)) -> dict:
+    return get_public_profile(db, tenant_id, user_id)
+
+
 @app.post("/v1/profiles/{user_id}/messages:ingest", tags=["messages"])
 def ingest(user_id: str, body: MessageIngestRequest, request: Request, tenant_id: str = Depends(auth_context),
            idem: str = Depends(idempotency_key), db: Session = Depends(get_db)) -> dict:
@@ -351,6 +360,217 @@ def ingest(user_id: str, body: MessageIngestRequest, request: Request, tenant_id
     pack = current_pack(request, db)
     response = ingest_message(db, tenant_id, user_id, body, pack, request.state.request_id, idem)
     _cache(db, tenant_id, idem, user_id, request, body, response)
+    return response
+
+
+def _chat_response(body: ChatRequest, engine: dict, reply: str, responder: str,
+                   *, profile_created: bool) -> dict:
+    response = {
+        "request_id": engine.get("request_id"),
+        "user_id": body.user_id,
+        "conversation_id": body.conversation_id,
+        "message_id": body.message_id,
+        "assistant_message_id": f"assistant_{body.message_id}",
+        "reply": reply,
+        "profile_version": engine["profile_version"],
+        "profile_created": profile_created,
+        "no_profile_change": engine.get("no_profile_change", False),
+        "model": {"provider": body.model_provider, "resolved": responder},
+        "reply_hints": engine.get("reply_hints", {}),
+        "changes": {
+            "profile_patch": engine.get("profile_patch", []),
+            "runtime_operations": engine.get("runtime_operations", []),
+            "maintenance_operations": engine.get("maintenance_operations", []),
+            "update_summary": engine.get("update_summary", {}),
+        },
+    }
+    if body.include_engine_trace:
+        response["engine"] = engine
+    return response
+
+
+@app.post(
+    "/v1/chat",
+    tags=["chat"],
+    summary="单次调用完成画像更新与聊天回复",
+    description=(
+        "自动读取当前画像版本、摄取本轮用户消息、更新画像并调用所选模型生成最终回复。"
+        "用户不存在时，可通过 initialize 在同一次请求中显式授权并创建画像。"
+    ),
+)
+def chat(
+    body: ChatRequest,
+    request: Request,
+    tenant_id: str = Depends(auth_context),
+    idem: str = Depends(idempotency_key),
+    db: Session = Depends(get_db),
+) -> dict:
+    cached = _cached(db, tenant_id, idem, request, body)
+    if cached:
+        return cached
+
+    pack = current_pack(request, db)
+    user = db.scalar(select(User).where(
+        User.tenant_id == tenant_id,
+        User.tenant_user_id == body.user_id,
+    ))
+    profile_created = False
+    if not user:
+        if body.initialize is None:
+            raise NotFoundError("人物不存在；首次调用请提供 initialize 和用户画像授权")
+        initialization = body.initialize
+        init_profile(
+            db,
+            tenant_id,
+            ProfileInitRequest(
+                tenant_user_id=body.user_id,
+                display_name=initialization.display_name,
+                birth_date=initialization.birth_date,
+                birth_time=initialization.birth_time,
+                timezone=initialization.timezone,
+                enneagram=initialization.enneagram,
+                consent=initialization.consent,
+            ),
+            pack,
+            request.state.request_id,
+            f"chat-init-{idem}",
+        )
+        profile_created = True
+        user = db.scalar(select(User).where(
+            User.tenant_id == tenant_id,
+            User.tenant_user_id == body.user_id,
+        ))
+
+    conversation = db.scalar(select(Conversation).where(
+        Conversation.user_id == user.id,
+        Conversation.external_id == body.conversation_id,
+    ))
+    if not conversation:
+        conversation = Conversation(
+            user_id=user.id,
+            external_id=body.conversation_id,
+            title=body.text[:24] + ("…" if len(body.text) > 24 else ""),
+        )
+        db.add(conversation)
+        db.flush()
+
+    user_message = db.scalar(select(ChatMessage).where(
+        ChatMessage.conversation_id == conversation.id,
+        ChatMessage.external_id == body.message_id,
+    ))
+    assistant_message_id = f"assistant_{body.message_id}"
+    if user_message:
+        if user_message.role != "user" or user_message.content != body.text:
+            raise HTTPException(status_code=409, detail="同一 message_id 不能用于不同消息")
+        assistant_message = db.scalar(select(ChatMessage).where(
+            ChatMessage.conversation_id == conversation.id,
+            ChatMessage.external_id == assistant_message_id,
+        ))
+        if assistant_message:
+            engine = assistant_message.engine_trace or {}
+            responder = engine.get("strategy_trace", {}).get("chat_responder", "cached-response")
+            response = _chat_response(
+                body, engine, assistant_message.content, responder,
+                profile_created=profile_created,
+            )
+            _cache(db, tenant_id, idem, request, body, response)
+            return response
+    else:
+        current = get_profile(db, tenant_id, body.user_id)
+        expected_version = body.expected_profile_version or current["profile_version"]
+        user_message = ChatMessage(
+            conversation_id=conversation.id,
+            external_id=body.message_id,
+            role="user",
+            content=body.text,
+            profile_version=expected_version,
+        )
+        db.add(user_message)
+        db.flush()
+
+    engine = user_message.engine_trace
+    if engine is None:
+        current = get_profile(db, tenant_id, body.user_id)
+        expected_version = body.expected_profile_version or current["profile_version"]
+        message = MessageIngestRequest(
+            conversation_id=body.conversation_id,
+            message_id=body.message_id,
+            expected_profile_version=expected_version,
+            occurred_at=body.occurred_at or datetime.now(timezone.utc),
+            text=body.text,
+            model_provider=body.model_provider,
+            context=body.context,
+        )
+        try:
+            engine = ingest_message(
+                db, tenant_id, body.user_id, message, pack,
+                request.state.request_id, f"chat-ingest-{idem}",
+            )
+        except SemanticExtractorError as exc:
+            logger.warning("Semantic extraction unavailable; using deterministic fallback: %s", exc)
+            engine = ingest_message(
+                db, tenant_id, body.user_id, message, pack,
+                request.state.request_id, f"chat-ingest-{idem}",
+                semantic_extractor=DeterministicSemanticExtractor(),
+            )
+            engine["strategy_trace"]["semantic_fallback"] = f"{body.model_provider}_unavailable"
+    else:
+        engine["strategy_trace"].pop("chat_model_error", None)
+
+    current_profile = get_profile(db, tenant_id, body.user_id)["profile"]
+    engine["strategy_trace"]["model_provider"] = body.model_provider
+    try:
+        reply, responder = _generate_reply(
+            body.text,
+            body.context.recent_turns,
+            current_profile,
+            engine,
+            body.model_provider,
+        )
+    except ModelNoResponseError as exc:
+        engine["strategy_trace"]["consumed_by_chatbot"] = False
+        engine["strategy_trace"]["chat_responder"] = "no-response"
+        engine["strategy_trace"]["chat_model_error"] = {
+            "provider": exc.provider,
+            "model": exc.model,
+            "http_status": exc.http_status,
+        }
+        user_message.engine_trace = engine
+        user_message.profile_version = engine["profile_version"]
+        conversation.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        details = {
+            "provider": exc.provider,
+            "model": exc.model,
+            "http_status": exc.http_status,
+            "upstream_message": exc.upstream_message,
+            "profile_version": engine["profile_version"],
+            "retryable": True,
+        }
+        if body.include_engine_trace:
+            details["engine"] = engine
+        return JSONResponse(status_code=502, content={
+            "request_id": request.state.request_id,
+            "code": "model_no_response",
+            "message": str(exc),
+            "details": details,
+        })
+
+    engine["strategy_trace"]["consumed_by_chatbot"] = True
+    engine["strategy_trace"]["chat_responder"] = responder
+    user_message.engine_trace = None
+    db.add(ChatMessage(
+        conversation_id=conversation.id,
+        external_id=assistant_message_id,
+        role="assistant",
+        content=reply,
+        engine_trace=engine,
+        profile_version=engine["profile_version"],
+    ))
+    conversation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    response = _chat_response(body, engine, reply, responder, profile_created=profile_created)
+    _cache(db, tenant_id, idem, request, body, response)
     return response
 
 
@@ -554,9 +774,11 @@ def capabilities(request: Request, tenant_id: str = Depends(auth_context), db: S
         "rule_pack": {"version": pack.version, "sha256": pack.sha256, "status": pack.status},
         "model_config": public_model_options(),
         "features": {
+            "one_call_chat": True,
             "profile_versions": True,
             "idempotent_writes": True,
             "profile_explanations": True,
+            "public_profile_projection": True,
             "explicit_corrections": True,
             "forget_requests": True,
             "permanent_profile_delete": True,

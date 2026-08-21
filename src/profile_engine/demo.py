@@ -22,7 +22,7 @@ from .model_gateway import (ModelConfigurationError, chat_completion,
 from .models import ChatMessage, Conversation, RulePack, User
 from .schemas import Consent, ConversationTurn, MessageContext, MessageIngestRequest, ProfileInitRequest
 from .security import SlidingWindowRateLimiter, constant_time_equal
-from .service import get_profile, ingest_message, init_profile
+from .service import get_profile, get_public_profile, ingest_message, init_profile
 
 
 router = APIRouter(prefix="/demo/api", tags=["demo"])
@@ -153,20 +153,8 @@ def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
     if not endpoint.api_key:
         exc = ModelConfigurationError("未配置 OpenRouter API Key")
         raise _no_response_error(endpoint, exc) from exc
-    portrait = profile.get("portrait", {})
-    digital_code = profile.get("digital_code_profile", {})
     internal_context = {
         "reply_hints": hints,
-        "portrait_essence": portrait.get("essence", {}).get("content"),
-        "digital_code_profile": {
-            "code": digital_code.get("code"),
-            "confidence": digital_code.get("confidence"),
-            "domain_summaries": {
-                key: value.get("summary")
-                for key, value in digital_code.get("domains", {}).items()
-            },
-        } if digital_code.get("status") == "derived" else None,
-        "overall_confidence": profile.get("meta", {}).get("overall_confidence"),
         "current_state": profile.get("runtime", {}).get("current_state", {}),
         "interaction_preferences": profile.get("runtime", {}).get("interaction_preferences", {}),
         "committed_memories_and_facts": profile.get("runtime", {}).get("memories", [])[-20:],
@@ -174,7 +162,10 @@ def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
         "accepted_trait_signals": engine.get("accepted_trait_signals", []),
         "applied_profile_patch": engine.get("profile_patch", []),
         "runtime_operations": engine.get("runtime_operations", []),
-        "strategy_trace": engine.get("strategy_trace", {}),
+        "strategy_trace": {
+            key: engine.get("strategy_trace", {}).get(key)
+            for key in ("scene", "trusted_trait_inputs", "reference_models_excluded")
+        },
     }
     system = (
         "你是温暖、自然、有边界感的陪伴型聊天机器人。根据内部互动策略回答用户，但绝不能提到画像、规则、"
@@ -182,7 +173,8 @@ def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
         "只有回答确实缺少关键条件，或用户明显想继续展开时，才自然问一个问题。不要每次都用问题结尾。"
         "像朋友聊天一样，可以直接回应、分享看法、轻微调侃或自然停住；避免反复使用‘听起来……你觉得呢/你希望哪种/要不要’模板。"
         "除非用户要求方案或内容本身需要步骤，否则使用自然短段落，不加标题、清单、总结或固定的共情—分析—追问结构。"
-        "执行优先级是：安全要求和用户当前明确诉求 > 当前状态与明确偏好 > turn_plan中的本轮活跃模块 > 长期画像。"
+        "执行优先级是：安全要求和用户当前明确诉求 > 当前状态与明确偏好 > turn_plan中的本轮活跃模块 > 有独立对话证据支持的长期倾向。"
+        "数字代码、出生分析、MBTI和九型人格等参考模型不会作为回答依据；不得自行补充或暗示这些类型结论。"
         "turn_plan和场景案例只用于决定目标、禁区与表达结构，不能复制成固定话术，也不能强化用户的防御模式。"
         "除非用户明确要求，避免说教、诊断和长篇建议。只把已提交的事实当作长期记忆；不要根据学校、职业等身份做刻板推断。"
         "如果 requires_fresh_information=true，而系统没有提供检索结果，必须明确说明信息可能不是实时的，不得声称‘最近’或‘当前行情’。内部策略如下：\n"
@@ -217,7 +209,6 @@ def demo_start(body: DemoStartRequest, request: Request, tenant_id: str = Depend
     )
     response = init_profile(db, tenant_id, init_body, _current_pack(request, db),
                             request.state.request_id, f"demo-start-{user_id}")
-    profile = response["profile"]
     user = db.scalar(select(User).where(
         User.tenant_id == tenant_id, User.tenant_user_id == user_id
     ))
@@ -226,15 +217,12 @@ def demo_start(body: DemoStartRequest, request: Request, tenant_id: str = Depend
     )
     db.add(conversation)
     db.commit()
-    mbti = profile.get("mbti_dimensions", {}).get("type_label")
-    if mbti == "XXXX":
-        mbti = None
+    public_summary = get_public_profile(db, tenant_id, user_id)["profile"]["summary"]
     return {
         "user_id": user_id,
         "profile_version": response["profile_version"],
         "display_name": body.display_name,
-        "mbti": mbti,
-        "overall_confidence": profile.get("meta", {}).get("overall_confidence"),
+        "profile_summary": public_summary,
         "rule_pack": response["rule_pack"],
         "warnings": response.get("warnings", []),
         "conversation_id": conversation.external_id,

@@ -65,6 +65,32 @@ class MessageIngestRequest(BaseModel):
     context: MessageContext = Field(default_factory=MessageContext)
 
 
+class ChatInitialization(BaseModel):
+    """Optional first-call profile initialization for the one-call chat API."""
+
+    display_name: str | None = Field(default=None, max_length=256)
+    birth_date: date | None = None
+    birth_time: str | None = Field(default=None, max_length=16)
+    timezone: str | None = Field(default=None, max_length=64)
+    enneagram: EnneagramIdentityInput | None = None
+    consent: Consent
+
+
+class ChatRequest(BaseModel):
+    """One-call orchestration: profile update plus final model response."""
+
+    user_id: str = Field(min_length=1, max_length=256)
+    conversation_id: str = Field(min_length=1, max_length=256)
+    message_id: str = Field(min_length=1, max_length=256)
+    text: str = Field(min_length=1, max_length=4000)
+    expected_profile_version: int | None = Field(default=None, ge=1)
+    occurred_at: datetime | None = None
+    model_provider: ModelProvider = "deepseek"
+    context: MessageContext = Field(default_factory=MessageContext)
+    initialize: ChatInitialization | None = None
+    include_engine_trace: bool = False
+
+
 class CorrectionRequest(BaseModel):
     expected_profile_version: int = Field(ge=1)
     target_path: str = Field(min_length=1, max_length=512)
