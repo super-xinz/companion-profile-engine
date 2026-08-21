@@ -21,10 +21,6 @@ from .models import (AuditLog, ChatMessage, Conversation, ManualOverride, Memory
                      TeamMember, User)
 from .model_gateway import public_model_options
 from .profile import TRAIT_NAMES, clone_profile, flattened_traits, rebuild_derived, recalculate_meta
-from .public_demo import (PUBLIC_TEMPLATE_IDENTITIES, public_conversation_summary,
-                          public_person_summary, public_profile_detail,
-                          resolve_public_conversation, resolve_public_user,
-                          sanitize_public_text)
 from .rule_compiler import UniqueKeyLoader, validate_rule_references
 from .schemas import (Consent, EnneagramIdentityInput, ProfileInitRequest,
                       SetEnneagramRequest)
@@ -172,14 +168,38 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def _person_view(db: Session, user: User) -> dict:
-    return public_person_summary(db, user)
+    version = current_version(db, user)
+    conversations = db.scalar(select(func.count()).select_from(Conversation).where(
+        Conversation.user_id == user.id, Conversation.status == "active"
+    )) or 0
+    last_conversation = db.scalar(select(Conversation).where(
+        Conversation.user_id == user.id
+    ).order_by(desc(Conversation.updated_at)).limit(1))
+    profile = version.snapshot
+    return {
+        "user_id": user.tenant_user_id,
+        "display_name": user.display_name or "未命名人物",
+        "birth_date": user.birth_date.isoformat() if user.birth_date else None,
+        "profile_version": version.version_no,
+        "overall_confidence": profile.get("meta", {}).get("overall_confidence", 0),
+        "mbti": profile.get("mbti_dimensions", {}).get("type_label", "XXXX"),
+        "conversation_count": conversations,
+        "updated_at": _iso(last_conversation.updated_at if last_conversation else user.updated_at),
+    }
 
 
-def _conversation_view(db: Session, item: Conversation, user: User | None = None) -> dict:
-    owner = user or db.get(User, item.user_id)
-    if not owner:
-        raise HTTPException(status_code=404, detail="人物不存在")
-    return public_conversation_summary(db, owner, item)
+def _conversation_view(db: Session, item: Conversation) -> dict:
+    count = db.scalar(select(func.count()).select_from(ChatMessage).where(ChatMessage.conversation_id == item.id)) or 0
+    last = db.scalar(select(ChatMessage).where(ChatMessage.conversation_id == item.id)
+                     .order_by(desc(ChatMessage.created_at)).limit(1))
+    return {
+        "conversation_id": item.external_id,
+        "title": item.title,
+        "summary": item.summary,
+        "message_count": count,
+        "last_message": last.content[:90] if last else None,
+        "updated_at": _iso(item.updated_at),
+    }
 
 
 def _ensure_conversation(db: Session, user: User, external_id: str | None = None,
@@ -221,12 +241,7 @@ def _sync_template_people(db: Session, tenant_id: str, pack, ensure_conversation
                 pack, f"seed-sync_{uuid.uuid4().hex}", f"seed-sync-{tenant_id}-{user.tenant_user_id}",
             )
         if ensure_conversation:
-            has_active_conversation = db.scalar(select(Conversation.id).where(
-                Conversation.user_id == user.id,
-                Conversation.status == "active",
-            ).limit(1))
-            if not has_active_conversation:
-                _ensure_conversation(db, user, title="示例对话")
+            _ensure_conversation(db, user, title=f"{person.display_name}的第一段对话")
 
 
 def _seed_people(db: Session, tenant_id: str, request: Request) -> None:
@@ -250,7 +265,7 @@ def _seed_people(db: Session, tenant_id: str, request: Request) -> None:
             pack, f"seed_{uuid.uuid4().hex}", f"seed-{tenant_id}-{user_id}",
         )
         user = find_user(db, tenant_id, user_id)
-        _ensure_conversation(db, user, title="示例对话")
+        _ensure_conversation(db, user, title=f"{name}的第一段对话")
         response["profile_version"]
         db.commit()
 
@@ -259,15 +274,21 @@ def _seed_people(db: Session, tenant_id: str, request: Request) -> None:
 def workspace_bootstrap(request: Request, tenant_id: str = Depends(demo_auth),
                         x_actor_name: str | None = Header(default=None, alias="X-Actor-Name"),
                         db: Session = Depends(get_db)) -> dict:
+    actor = _actor(x_actor_name)
+    member = _ensure_member(db, tenant_id, actor)
     _seed_people(db, tenant_id, request)
     people = db.scalars(select(User).where(
         User.tenant_id == tenant_id,
-        User.tenant_user_id.in_(tuple(PUBLIC_TEMPLATE_IDENTITIES)),
         User.profile_consent.is_(True),
         User.inference_enabled.is_(True),
     ).order_by(desc(User.updated_at))).all()
     db.commit()
-    return {"people": [_person_view(db, user) for user in people]}
+    return {
+        "actor": {"display_name": member.display_name, "role": member.role, "permissions": member.permissions},
+        "people": [_person_view(db, user) for user in people],
+        "rule_pack": {"version": _current_pack(request, db).version, "status": "published"},
+        "model_config": public_model_options(),
+    }
 
 
 @router.get("/people")
@@ -275,16 +296,13 @@ def list_people(q: str | None = Query(default=None, max_length=128), tenant_id: 
                 db: Session = Depends(get_db)) -> dict:
     query = select(User).where(
         User.tenant_id == tenant_id,
-        User.tenant_user_id.in_(tuple(PUBLIC_TEMPLATE_IDENTITIES)),
         User.profile_consent.is_(True),
         User.inference_enabled.is_(True),
     )
+    if q:
+        query = query.where(User.display_name.ilike(f"%{q.strip()}%"))
     people = db.scalars(query.order_by(desc(User.updated_at))).all()
-    views = [_person_view(db, user) for user in people]
-    if q and q.strip():
-        needle = sanitize_public_text(q).casefold()
-        views = [item for item in views if needle in item["display_name"].casefold()]
-    return {"people": views}
+    return {"people": [_person_view(db, user) for user in people]}
 
 
 @router.post("/people")
@@ -308,54 +326,62 @@ def create_person(body: PersonCreate, request: Request, tenant_id: str = Depends
             "profile": response["profile"]}
 
 
-@router.get("/people/{public_id}")
-def person_detail(public_id: str, tenant_id: str = Depends(demo_auth), db: Session = Depends(get_db)) -> dict:
-    user = resolve_public_user(db, tenant_id, public_id)
-    profile_response = get_profile(db, tenant_id, user.tenant_user_id)
-    profile = profile_response["profile"]
+@router.get("/people/{user_id}")
+def person_detail(user_id: str, tenant_id: str = Depends(demo_auth), db: Session = Depends(get_db)) -> dict:
+    user = find_user(db, tenant_id, user_id)
+    profile = get_profile(db, tenant_id, user_id)
     conversations = db.scalars(select(Conversation).where(
         Conversation.user_id == user.id, Conversation.status == "active"
     ).order_by(desc(Conversation.updated_at))).all()
+    overrides = db.scalars(select(ManualOverride).where(
+        ManualOverride.user_id == user.id, ManualOverride.active.is_(True)
+    )).all()
     return {
         "person": _person_view(db, user),
-        **public_profile_detail(profile),
-        "conversations": [_conversation_view(db, item, user) for item in conversations],
+        **profile,
+        "conversations": [_conversation_view(db, item) for item in conversations],
+        "manual_overrides": [{
+            "id": item.id, "target_path": item.target_path, "value": item.value.get("value"),
+            "reason": item.reason, "created_by": item.created_by, "updated_at": _iso(item.updated_at),
+        } for item in overrides],
     }
 
 
-@router.post("/people/{public_id}/conversations")
-def create_conversation(public_id: str, body: ConversationCreate, tenant_id: str = Depends(demo_auth),
+@router.post("/people/{user_id}/conversations")
+def create_conversation(user_id: str, body: ConversationCreate, tenant_id: str = Depends(demo_auth),
                         db: Session = Depends(get_db)) -> dict:
-    user = resolve_public_user(db, tenant_id, public_id)
-    title = sanitize_public_text(body.title, fallback="新的陪伴对话")
-    item = _ensure_conversation(db, user, title=title)
+    user = find_user(db, tenant_id, user_id)
+    item = _ensure_conversation(db, user, title=body.title)
     db.commit()
-    return {"conversation": _conversation_view(db, item, user)}
+    return {"conversation": _conversation_view(db, item)}
 
 
-@router.get("/people/{public_id}/conversations")
-def list_conversations(public_id: str, tenant_id: str = Depends(demo_auth), db: Session = Depends(get_db)) -> dict:
-    user = resolve_public_user(db, tenant_id, public_id)
+@router.get("/people/{user_id}/conversations")
+def list_conversations(user_id: str, tenant_id: str = Depends(demo_auth), db: Session = Depends(get_db)) -> dict:
+    user = find_user(db, tenant_id, user_id)
     items = db.scalars(select(Conversation).where(
         Conversation.user_id == user.id, Conversation.status == "active"
     ).order_by(desc(Conversation.updated_at))).all()
-    return {"conversations": [_conversation_view(db, item, user) for item in items]}
+    return {"conversations": [_conversation_view(db, item) for item in items]}
 
 
-@router.get("/people/{public_id}/conversations/{conversation_id}/messages")
-def list_messages(public_id: str, conversation_id: str, tenant_id: str = Depends(demo_auth),
+@router.get("/people/{user_id}/conversations/{conversation_id}/messages")
+def list_messages(user_id: str, conversation_id: str, tenant_id: str = Depends(demo_auth),
                   db: Session = Depends(get_db)) -> dict:
-    user = resolve_public_user(db, tenant_id, public_id)
-    conversation = resolve_public_conversation(db, user, conversation_id)
+    user = find_user(db, tenant_id, user_id)
+    conversation = db.scalar(select(Conversation).where(
+        Conversation.user_id == user.id, Conversation.external_id == conversation_id
+    ))
+    if not conversation:
+        raise HTTPException(status_code=404, detail="对话不存在")
     items = db.scalars(select(ChatMessage).where(
         ChatMessage.conversation_id == conversation.id
     ).order_by(ChatMessage.created_at)).all()
     return {
-        "conversation": _conversation_view(db, conversation, user),
+        "conversation": _conversation_view(db, conversation),
         "messages": [{
-            "role": item.role,
-            "content": sanitize_public_text(item.content, fallback="内容已保护"),
-            "profile_version": item.profile_version,
+            "message_id": item.external_id, "role": item.role, "content": item.content,
+            "profile_version": item.profile_version, "engine_trace": item.engine_trace,
             "created_at": _iso(item.created_at),
         } for item in items],
     }

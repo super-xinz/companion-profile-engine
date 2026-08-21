@@ -1,18 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from time import sleep
-from urllib.parse import urlparse
 
 import httpx
 
 from .config import get_settings
 from .model_catalog import (MODEL_PROVIDERS, MODEL_SPECS_BY_PROVIDER,
                             ModelProvider)
-
-
-_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
-_RETRY_BACKOFF_SECONDS = 0.25
 
 
 class ModelConfigurationError(RuntimeError):
@@ -95,36 +89,19 @@ def chat_completion(
     spec = MODEL_SPECS_BY_PROVIDER[endpoint.provider]
     if json_response and spec.supports_json_object:
         payload["response_format"] = {"type": "json_object"}
-    # The ``reasoning`` switch is an OpenRouter extension.  The production
-    # demo may point this OpenAI-compatible client directly at the selected
-    # provider, where sending that extension would make an otherwise valid
-    # request fail schema validation.
-    if spec.disable_reasoning and urlparse(endpoint.base_url).hostname != "api.deepseek.com":
+    if spec.disable_reasoning:
         payload["reasoning"] = {"enabled": False}
-    for attempt in range(2):
-        try:
-            response = httpx.post(
-                f"{endpoint.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {endpoint.api_key}",
-                    "Content-Type": "application/json",
-                    **endpoint.extra_headers,
-                },
-                json=payload,
-                timeout=endpoint.timeout,
-            )
-            response.raise_for_status()
-            break
-        except (httpx.TimeoutException, httpx.NetworkError):
-            if attempt == 0:
-                sleep(_RETRY_BACKOFF_SECONDS)
-                continue
-            raise
-        except httpx.HTTPStatusError as exc:
-            if attempt == 0 and exc.response.status_code in _RETRYABLE_STATUS_CODES:
-                sleep(_RETRY_BACKOFF_SECONDS)
-                continue
-            raise
+    response = httpx.post(
+        f"{endpoint.base_url}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {endpoint.api_key}",
+            "Content-Type": "application/json",
+            **endpoint.extra_headers,
+        },
+        json=payload,
+        timeout=endpoint.timeout,
+    )
+    response.raise_for_status()
     body = response.json()
     content = body["choices"][0]["message"]["content"]
     if not isinstance(content, str) or not content.strip():

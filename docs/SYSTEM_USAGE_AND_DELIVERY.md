@@ -4,9 +4,10 @@
 
 | 项目 | 地址 |
 | --- | --- |
-| 网站体验页 | `https://companion-profile-engine.zeabur.app/demo` |
-| 健康检查 | `https://companion-profile-engine.zeabur.app/health` |
-| API Base URL | `https://companion-profile-engine.zeabur.app` |
+| 网站工作台 | `https://companion-profile-engine-6a60.zeabur.app/demo` |
+| Swagger API | `https://companion-profile-engine-6a60.zeabur.app/docs` |
+| 健康检查 | `https://companion-profile-engine-6a60.zeabur.app/health` |
+| API Base URL | `https://companion-profile-engine-6a60.zeabur.app` |
 
 网站访问码、`X-Tenant-ID` 与 `X-API-Key` 必须由项目负责人通过安全渠道单独提供，不写入仓库、文档或 Postman Collection。
 
@@ -58,11 +59,11 @@ Idempotency-Key: <request-id>
 }
 ```
 
-允许值为 `deepseek`、`claude`、`gpt`、`glm`、`gemini` 或 `kimi`。未传时使用服务器默认抽取策略。该字段只属于受信任的 B 端 `/v1` 调用；公开网站不提供模型选择，也不返回供应商或模型信息。
+允许值为 `deepseek`、`claude`、`gpt`、`glm`、`gemini` 或 `kimi`。未传时使用服务器默认抽取策略。网站顶部的模型下拉框使用同一字段，不会向浏览器返回 OpenRouter Key。
 
 ## 功能检查标准
 
-- 网站、健康检查和鉴权 API 可访问，生产 Swagger/OpenAPI 不可访问；
+- 网站、Swagger、健康检查和鉴权 API 可访问；
 - DeepSeek 请求返回 `200`，且 `semantic_extractor_version` 包含 `deepseek/deepseek-v3.2`；
 - 画像版本、幂等写入、版本冲突、规则包读取和遗忘清理符合预期；
 - 响应包含 `X-Request-ID`、`X-API-Version`、限流和安全 Header；

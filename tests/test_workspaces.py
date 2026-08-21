@@ -1,5 +1,5 @@
-import json
 import uuid
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -7,234 +7,226 @@ from sqlalchemy import select
 from profile_engine.api import app
 from profile_engine.db import SessionLocal
 from profile_engine.demo import demo_auth
-from profile_engine.models import ChatMessage, Conversation, User
-from profile_engine.public_demo import (PUBLIC_TEMPLATE_IDENTITIES,
-                                        public_conversation_id,
-                                        public_dynamic_summary,
-                                        public_preferences,
-                                        sanitize_public_text)
+from profile_engine.models import ProfileVersion, User
+from profile_engine.schemas import ReplyGuidance, SemanticAnalysis
+from profile_engine.workspace import _actor
 
 
-FORBIDDEN_PUBLIC_MARKERS = (
-    "mbti", "enneagram", "numerology", "九型", "数字密码", "数字学", "八字",
-    "bazi", "person-1988", "person-1989", "person-1996", "person-1998",
-    "1988-08-09", "1989-10-15", "1989-11-28", "1996-03-28", "1998-12-06",
-    ".xlsx", "birth_date", "source_profile", "type_label", "engine_trace",
-    "rule_pack", "model_config", "permissions",
-    "四柱", "日主", "身强", "身弱", "偏财格", "七杀格", "伤官格", "正官格",
-    "完美型", "助人型", "成就型", "观察型", "忠诚型", "探索型", "挑战型", "和平型",
-    "1号", "1型", "内心码", "制约数", "天赋数", "坐镇码", "缺1", "6318",
-    "戊辰 庚申 丙申", "己巳乙亥壬辰", "deepseek", "openai", "gpt",
-    "claude", "anthropic", "gemini", "glm", "kimi", "moonshot", "openrouter",
-)
+def test_caller_controlled_actor_header_cannot_impersonate_workspace_members():
+    assert _actor("任意伪造管理员") == "系统管理员"
 
 
-def _assert_public_payload(payload) -> None:
-    text = json.dumps(payload, ensure_ascii=False).lower()
-    for marker in FORBIDDEN_PUBLIC_MARKERS:
-        assert marker not in text
+def test_rule_comparison_runs_semantic_analysis_once(monkeypatch):
+    tenant = f"rules-model-{uuid.uuid4().hex}"
+    calls = {"factory": 0, "analyze": 0, "provider": None}
 
+    class CountingExtractor:
+        version = "counting-extractor-v1"
 
-def test_public_text_sanitizer_covers_method_codes_birth_data_and_source_files():
-    raw = (
-        "MBTI ENTP；九型人格 7w8，SX/SO；Numerology 数字密码；"
-        "生辰八字 Bazi，四柱、日主、身强、身弱、偏财格、七杀格、伤官格、正官格；"
-        "完美型、助人型、成就型、观察型、忠诚型、探索型、挑战型、和平型、1号、1型；"
-        "内心码、制约数、天赋数、坐镇码、缺1、6318；戊辰 庚申 丙申、己巳乙亥壬辰；"
-        "生日：1998-12-06；person-1998-12-06；"
-        "1998年12月6日_机器人性格设定.xlsx；整体可信度 45%。"
-        "M B T I、E N N E A G R A M、N U M E R O L O G Y、B A Z I；"
-        "E-N-T-P、S X / S O、九 型 人 格、数 字 密 码、八 字。"
-        "DeepSeek、D e e p S e e k、OpenAI、G P T-5、Claude、Gemini、GLM、Kimi、OpenRouter。"
-        "ＭＢＴＩ、ＥＮＴＰ、甲 子 乙 丑。"
-    )
-    cleaned = sanitize_public_text(raw)
-    _assert_public_payload(cleaned)
-    assert "45%" in cleaned
+        def analyze(self, *_args, **_kwargs):
+            calls["analyze"] += 1
+            return SemanticAnalysis(reply_guidance=ReplyGuidance())
 
+    def factory(provider=None):
+        calls["factory"] += 1
+        calls["provider"] = provider
+        return CountingExtractor()
 
-def test_public_workspace_uses_aliases_and_whitelisted_dtos_only():
-    tenant = f"public-workspace-{uuid.uuid4().hex}"
+    monkeypatch.setattr("profile_engine.workspace.get_semantic_extractor", factory)
     app.dependency_overrides[demo_auth] = lambda: tenant
     try:
         with TestClient(app) as client:
-            boot = client.post("/demo/api/workspace/bootstrap")
-            assert boot.status_code == 200, boot.text
-            assert set(boot.json()) == {"people"}
-            people = boot.json()["people"]
-            expected_aliases = {
-                identity.public_id for identity in PUBLIC_TEMPLATE_IDENTITIES.values()
-            }
-            assert len(people) == 5
-            assert expected_aliases == {item["public_id"] for item in people}
-            assert {f"互动样本 {letter}" for letter in "ABCDE"} <= {
-                item["display_name"] for item in people
-            }
-            for item in people:
-                assert set(item) == {
-                    "public_id", "display_name", "tagline", "profile_version",
-                    "confidence", "confidence_explanation", "conversation_count",
-                    "updated_at",
-                }
-                assert 0 <= item["confidence"] <= 1
-                assert "不是对一个人的判断准确率" in item["confidence_explanation"]
-            _assert_public_payload(boot.json())
-
-            initial_conversation_counts = {
-                item["public_id"]: item["conversation_count"] for item in people
-            }
-            repeated_boot = client.post("/demo/api/workspace/bootstrap")
-            assert repeated_boot.status_code == 200, repeated_boot.text
-            assert {
-                item["public_id"]: item["conversation_count"]
-                for item in repeated_boot.json()["people"]
-            } == initial_conversation_counts
-
-            summaries = {}
-            for identity in PUBLIC_TEMPLATE_IDENTITIES.values():
-                example = client.get(f"/demo/api/people/{identity.public_id}")
-                assert example.status_code == 200, example.text
-                payload = example.json()
-                summaries[identity.public_id] = payload["dynamic_summary"]
-                assert 3 <= len(payload["communication_preferences"]) <= 5
-                assert all(
-                    set(preference) == {"name", "value"}
-                    for preference in payload["communication_preferences"]
-                )
-                _assert_public_payload(payload)
-            assert len(set(summaries.values())) == 5
-
-            alias = "profile-sky"
-            detail = client.get(f"/demo/api/people/{alias}")
-            assert detail.status_code == 200, detail.text
-            body = detail.json()
-            assert set(body) == {
-                "person", "metrics", "dynamic_summary", "communication_preferences",
-                "confidence", "confidence_explanation", "profile_version", "conversations",
-            }
-            assert body["person"]["public_id"] == alias
-            assert len(body["metrics"]) == 17
-            assert all(set(metric) == {"name", "value", "confidence"} for metric in body["metrics"])
-            assert all(0 <= metric["value"] <= 1 for metric in body["metrics"])
-            assert all(0 <= metric["confidence"] <= 1 for metric in body["metrics"])
-            assert isinstance(body["dynamic_summary"], str)
-            assert isinstance(body["communication_preferences"], list)
-            _assert_public_payload(body)
-
-            internal = client.get("/demo/api/people/person-1998-12-06")
-            assert internal.status_code == 404
-
-            listed = client.get("/demo/api/people", params={"q": "互动样本 E"})
-            assert listed.status_code == 200
-            assert [item["public_id"] for item in listed.json()["people"]] == [alias]
-
-            created = client.post(
-                f"/demo/api/people/{alias}/conversations",
-                json={"title": "ENTP 与九型人格 7w8 的 1998-12-06.xlsx"},
-            )
-            assert created.status_code == 200, created.text
-            conversation = created.json()["conversation"]
-            assert conversation["conversation_id"].startswith("conversation-")
-            _assert_public_payload(conversation)
-
-            with SessionLocal() as db:
-                user = db.scalar(select(User).where(
-                    User.tenant_id == tenant,
-                    User.tenant_user_id == "person-1998-12-06",
-                ))
-                stored = db.scalars(select(Conversation).where(
-                    Conversation.user_id == user.id,
-                )).all()
-                item = next(
-                    row for row in stored
-                    if public_conversation_id(user, row.external_id)
-                    == conversation["conversation_id"]
-                )
-                db.add(ChatMessage(
-                    conversation_id=item.id,
-                    external_id="person-1998-12-06",
-                    role="assistant",
-                    content="你是 ENTP，九型人格 7w8，来源在 secret.xlsx，可信度 45%。",
-                    profile_version=body["profile_version"],
-                    engine_trace={"strategy_trace": {"source": "secret.xlsx"}},
-                ))
-                db.commit()
-
-            messages = client.get(
-                f"/demo/api/people/{alias}/conversations/"
-                f"{conversation['conversation_id']}/messages"
-            )
-            assert messages.status_code == 200, messages.text
-            item = messages.json()["messages"][0]
-            assert set(item) == {"role", "content", "profile_version", "created_at"}
-            assert "45%" in item["content"]
-            _assert_public_payload(messages.json())
+            response = client.post("/demo/api/rules/test", json={
+                "text": "我通常会先自己梳理，再和团队讨论。",
+                "model_provider": "deepseek",
+            })
+            assert response.status_code == 200, response.text
+            assert response.json()["production_profile_unchanged"] is True
+            assert response.json()["production"]["extractor_version"] == "counting-extractor-v1"
+            assert response.json()["candidate"]["extractor_version"] == "counting-extractor-v1"
+            assert calls == {"factory": 1, "analyze": 1, "provider": "deepseek"}
     finally:
         app.dependency_overrides.pop(demo_auth, None)
 
 
-def test_public_template_defaults_are_overridden_by_valid_runtime_preferences():
-    profile = {
-        "identity": {"template_person_id": "person-1988-08-09"},
-        "runtime": {
-            "interaction_preferences": {
-                "response_length": "long",
-                "directness": 0.91,
-                "empathy_first": False,
-                "unknown_internal_option": "secret",
-            },
-            "current_state": {"engagement": {"value": 0.8}},
-            "memories": [],
-        },
-    }
-
-    preferences = public_preferences(profile)
-    values = {item["name"]: item["value"] for item in preferences}
-    assert len(preferences) == 5
-    assert values["回复篇幅"] == "充分"
-    assert values["表达直接度"] == 0.91
-    assert values["优先回应感受"] is False
-    assert values["追问频率"] == 0.45
-    assert values["幽默程度"] == 0.7
-    assert "已结合 1 项近期互动状态" in public_dynamic_summary(profile)
-    assert "已确认 3 项沟通偏好" in public_dynamic_summary(profile)
-    _assert_public_payload({
-        "summary": public_dynamic_summary(profile),
-        "preferences": preferences,
-    })
-
-
-def test_non_public_workspace_and_rule_routes_are_not_reachable():
-    tenant = f"blocked-workspace-{uuid.uuid4().hex}"
+def test_multi_person_profile_and_rule_workspaces():
+    tenant = f"workspace-{uuid.uuid4().hex}"
     app.dependency_overrides[demo_auth] = lambda: tenant
-    blocked = (
-        ("post", "/demo/api/start", {"display_name": "测试"}),
-        ("post", "/demo/api/people", {"display_name": "测试"}),
-        ("post", "/demo/api/people/profile-sky/manual-edit", {}),
-        ("post", "/demo/api/people/profile-sky/enneagram", {}),
-        ("get", "/demo/api/people/profile-sky/profile-explain", None),
-        ("get", "/demo/api/rules/workspace", None),
-        ("post", "/demo/api/rules/test", {"text": "测试"}),
-        ("post", "/demo/api/rules/drafts", {}),
-        ("post", "/demo/api/members", {}),
-    )
+    headers = {"X-Demo-Code": "ignored", "X-Actor-Name": quote("系统管理员")}
     try:
         with TestClient(app) as client:
-            for method, path, payload in blocked:
-                response = client.request(method, path, json=payload)
-                assert response.status_code == 404, (method, path, response.text)
-                assert response.json() == {"detail": "Not Found"}
-            assert client.get("/rules").status_code == 404
-            assert client.get("/assets/rules.js").status_code == 404
-            assert client.get("/assets/rules.html").status_code == 404
-            assert client.get("/assets/demo.html").status_code == 404
-            for variant in (
-                "/demo/api//rules/workspace",
-                "/demo/api/RULES/workspace",
-                "/demo/api/people/profile-sky%2Fprofile-explain",
-                "/assets/%72ules.js",
-                "/assets/rules.js/extra",
-            ):
-                assert client.get(variant, follow_redirects=False).status_code == 404
+            boot = client.post("/demo/api/workspace/bootstrap", headers=headers)
+            assert boot.status_code == 200, boot.text
+            template_ids = {
+                "person-1988-08-09", "person-1989-10-15", "person-1989-11-28",
+                "person-1996-03-28", "person-1998-12-06",
+            }
+            assert template_ids <= {person["user_id"] for person in boot.json()["people"]}
+
+            duplicate_yaml = client.post("/demo/api/rules/documents/parse", headers=headers, json={
+                "asset": "schema",
+                "document_text": "schema_version: v1\nschema_version: v2\n",
+            })
+            assert duplicate_yaml.status_code == 422
+
+            for user_id, expected_code in (("person-1989-11-28", "SX/SO｜7w8"), ("person-1996-03-28", "SO/SX｜2w1")):
+                detail = client.get(f"/demo/api/people/{user_id}", headers=headers)
+                assert detail.status_code == 200, detail.text
+                assert detail.json()["profile"]["enneagram_profile"]["identity"]["code"] == expected_code
+
+            with SessionLocal() as db:
+                target = db.scalar(select(ProfileVersion).where(
+                    ProfileVersion.user_id == db.scalar(select(User).where(
+                        User.tenant_id == tenant,
+                        User.tenant_user_id == "person-1996-03-28",
+                    )).id
+                ).order_by(ProfileVersion.version_no.desc()).limit(1))
+                assert target is not None
+                snapshot = target.snapshot
+                snapshot["enneagram_profile"] = {"status": "unassigned", "identity": {}}
+                target.snapshot = snapshot
+                db.commit()
+
+            refreshed = client.post("/demo/api/workspace/bootstrap", headers=headers)
+            assert refreshed.status_code == 200, refreshed.text
+            restored = client.get("/demo/api/people/person-1996-03-28", headers=headers)
+            assert restored.status_code == 200, restored.text
+            assert restored.json()["profile"]["enneagram_profile"]["identity"]["code"] == "SO/SX｜2w1"
+
+            disabled_template_id = "person-1988-08-09"
+            with SessionLocal() as db:
+                disabled = db.scalar(select(User).where(
+                    User.tenant_id == tenant,
+                    User.tenant_user_id == disabled_template_id,
+                ))
+                assert disabled is not None
+                disabled.inference_enabled = False
+                db.commit()
+            refreshed = client.post("/demo/api/workspace/bootstrap", headers=headers)
+            assert refreshed.status_code == 200, refreshed.text
+            assert disabled_template_id not in {
+                person["user_id"] for person in refreshed.json()["people"]
+            }
+            searched = client.get("/demo/api/people", headers=headers)
+            assert searched.status_code == 200, searched.text
+            assert disabled_template_id not in {
+                person["user_id"] for person in searched.json()["people"]
+            }
+
+            minimal = client.post("/demo/api/people", headers=headers, json={
+                "display_name": "无生日测试人物", "birth_date": None, "notes": "推断开关回归测试",
+            })
+            assert minimal.status_code == 200, minimal.text
+            with SessionLocal() as db:
+                minimal_user = db.scalar(select(User).where(
+                    User.tenant_id == tenant,
+                    User.tenant_user_id == minimal.json()["person"]["user_id"],
+                ))
+                assert minimal_user is not None
+                assert minimal_user.profile_consent is True
+                assert minimal_user.inference_enabled is True
+
+            created = client.post("/demo/api/people", headers=headers, json={
+                "display_name": "测试人物", "birth_date": None, "notes": "隔离测试",
+                "enneagram": {
+                    "core_type": 7, "wing": 6,
+                    "primary_instinct": "SX", "secondary_instinct": "SO",
+                    "source": "expert_confirmed", "confidence": .95,
+                },
+            })
+            assert created.status_code == 200, created.text
+            person = created.json()["person"]
+            conversation = created.json()["conversation"]
+
+            detail = client.get(f"/demo/api/people/{person['user_id']}", headers=headers)
+            assert detail.status_code == 200, detail.text
+            assert detail.json()["person"]["conversation_count"] == 1
+            assert detail.json()["profile"]["enneagram_profile"]["identity"]["code"] == "SX/SO｜7w6"
+            trait = detail.json()["profile"]["core_traits"]["energy_mode"]["extroversion"]["value"]
+            edited = client.post(f"/demo/api/people/{person['user_id']}/manual-edit", headers=headers, json={
+                "expected_profile_version": detail.json()["profile_version"],
+                "target_path": "core_traits.energy_mode.extroversion",
+                "value": min(1, trait + .2),
+                "reason": "专家根据线下访谈确认",
+            })
+            assert edited.status_code == 200, edited.text
+            assert edited.json()["locked"] is True
+            enneagram = client.post(f"/demo/api/people/{person['user_id']}/enneagram", headers=headers, json={
+                "expected_profile_version": edited.json()["profile_version"],
+                "enneagram": {
+                    "core_type": 8, "wing": 9,
+                    "primary_instinct": "SP", "secondary_instinct": "SX",
+                    "source": "expert_confirmed", "confidence": .95,
+                },
+                "reason": "专家复核九型测评结果",
+            })
+            assert enneagram.status_code == 200, enneagram.text
+            assert enneagram.json()["enneagram_profile"]["identity"]["code"] == "SP/SX｜8w9"
+
+            rejected_path = client.post(
+                f"/demo/api/people/{person['user_id']}/manual-edit",
+                headers=headers,
+                json={
+                    "expected_profile_version": enneagram.json()["profile_version"],
+                    "target_path": "runtime.memories",
+                    "value": [],
+                    "reason": "不应允许通过人工编辑覆盖运行时内部结构",
+                },
+            )
+            assert rejected_path.status_code == 422
+
+            messages = client.get(
+                f"/demo/api/people/{person['user_id']}/conversations/{conversation['conversation_id']}/messages",
+                headers=headers,
+            )
+            assert messages.status_code == 200
+            assert messages.json()["messages"] == []
+
+            rules = client.get("/demo/api/rules/workspace", headers=headers)
+            assert rules.status_code == 200, rules.text
+            current = rules.json()["current"]
+            draft = client.post("/demo/api/rules/drafts", headers=headers, json={
+                "title": "自动化测试草稿", "base_revision_id": current["id"],
+            })
+            assert draft.status_code == 200, draft.text
+            revision = draft.json()["revision"]
+            content = revision["canonical_json"]
+            content["cold_start"]["status"] = "专家协作测试"
+            saved = client.put(f"/demo/api/rules/drafts/{revision['id']}", headers=headers, json={
+                "canonical_json": content, "change_summary": "更新规则状态说明",
+            })
+            assert saved.status_code == 200, saved.text
+            assert saved.json()["revision"]["validation_report"]["valid"] is True
+
+            submitted = client.post(f"/demo/api/rules/revisions/{revision['id']}/submit", headers=headers, json={"note": "提交"})
+            assert submitted.status_code == 200, submitted.text
+            approved = client.post(f"/demo/api/rules/revisions/{revision['id']}/approve", headers=headers, json={"note": "通过"})
+            assert approved.status_code == 200, approved.text
+            published = client.post(f"/demo/api/rules/revisions/{revision['id']}/publish", headers=headers, json={"note": "发布"})
+            assert published.status_code == 200, published.text
+            assert published.json()["rule_pack"]["status"] == "published"
+
+            isolated = client.post("/demo/api/rules/test", headers=headers, json={
+                "revision_id": revision["id"],
+                "text": "聚会后我通常需要一个人待一会儿才能恢复。",
+                "user_id": person["user_id"],
+            })
+            assert isolated.status_code == 200, isolated.text
+            assert isolated.json()["isolated"] is True
+            assert isolated.json()["production_profile_unchanged"] is True
+
+            malformed = client.post("/demo/api/rules/drafts", headers=headers, json={
+                "title": "异常结构验证", "base_revision_id": revision["id"],
+            })
+            malformed_id = malformed.json()["revision"]["id"]
+            malformed_save = client.put(
+                f"/demo/api/rules/drafts/{malformed_id}",
+                headers=headers,
+                json={"canonical_json": {"schema": []}, "change_summary": "结构错误测试"},
+            )
+            assert malformed_save.status_code == 200, malformed_save.text
+            report = malformed_save.json()["revision"]["validation_report"]
+            assert report["valid"] is False
+            assert "字段类型不正确" in report["errors"][0]
     finally:
         app.dependency_overrides.pop(demo_auth, None)

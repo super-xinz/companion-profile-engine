@@ -84,8 +84,7 @@ logger.setLevel(logging.INFO)
 
 
 def _apply_security_headers(response: Response, request: Request, req_id: str, settings) -> None:
-    if request.url.path != "/demo/api/chat":
-        response.headers["X-Request-ID"] = req_id
+    response.headers["X-Request-ID"] = req_id
     response.headers["X-API-Version"] = "1"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -111,62 +110,12 @@ def _apply_security_headers(response: Response, request: Request, req_id: str, s
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
 
-def _public_demo_request_allowed(method: str, path: str) -> bool:
-    if method == "POST" and path in {"/demo/api/workspace/bootstrap", "/demo/api/chat"}:
-        return True
-    if method == "GET" and path == "/demo/api/people":
-        return True
-    parts = path.strip("/").split("/")
-    if len(parts) < 4 or parts[:3] != ["demo", "api", "people"] or not parts[3]:
-        return False
-    if len(parts) == 4:
-        return method == "GET"
-    if len(parts) == 5 and parts[4] == "conversations":
-        return method in {"GET", "POST"}
-    return (
-        len(parts) == 7
-        and parts[4] == "conversations"
-        and bool(parts[5])
-        and parts[6] == "messages"
-        and method == "GET"
-    )
-
-
-def _public_surface_blocked(request: Request, settings) -> bool:
-    path = request.url.path
-    if path.startswith("/demo/api"):
-        if settings.rule_workbench_active and (
-            path.startswith("/demo/api/rules") or path == "/demo/api/members"
-        ):
-            return False
-        return not settings.demo_features_active or not _public_demo_request_allowed(
-            request.method, path
-        )
-    if path == "/demo":
-        return not settings.demo_features_active
-    if path == "/rules":
-        return not settings.rule_workbench_active
-    if path == "/assets/demo.js":
-        return not settings.demo_features_active
-    if path == "/assets/demo.html":
-        return True
-    if path.startswith("/assets/rules"):
-        return not settings.rule_workbench_active
-    if settings.is_production and path.startswith("/assets/"):
-        return path not in {"/assets/demo.js", "/assets/workbench.css"}
-    return False
-
-
 @app.middleware("http")
 async def attach_request_id(request: Request, call_next):
     started = time.perf_counter()
     req_id = safe_request_id(request.headers.get("X-Request-ID"), request_id())
     request.state.request_id = req_id
     settings = get_settings()
-    if _public_surface_blocked(request, settings):
-        response = JSONResponse(status_code=404, content={"detail": "Not Found"})
-        _apply_security_headers(response, request, req_id, settings)
-        return response
     content_length = request.headers.get("Content-Length")
     if request.method in {"POST", "PUT", "PATCH"} and content_length is None:
         response = _error(request, 411, "length_required", "请求必须提供 Content-Length")
@@ -372,7 +321,7 @@ def demo_page() -> HTMLResponse:
 
 @app.get("/rules", response_class=HTMLResponse, include_in_schema=False)
 def rules_page() -> HTMLResponse:
-    if not get_settings().rule_workbench_active:
+    if not get_settings().demo_features_active:
         raise HTTPException(status_code=404, detail="规则工作台未启用")
     html = files("profile_engine").joinpath("static/rules.html").read_text(encoding="utf-8")
     return HTMLResponse(html)

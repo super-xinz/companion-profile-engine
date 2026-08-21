@@ -20,9 +20,6 @@ from .model_catalog import ModelProvider
 from .model_gateway import (ModelConfigurationError, chat_completion,
                             get_model_endpoint)
 from .models import ChatMessage, Conversation, RulePack, User
-from .public_demo import (public_dynamic_summary, public_metrics, public_preferences,
-                          public_update_summary, resolve_public_conversation,
-                          resolve_public_user, sanitize_public_text)
 from .schemas import Consent, ConversationTurn, MessageContext, MessageIngestRequest, ProfileInitRequest
 from .security import SlidingWindowRateLimiter, constant_time_equal
 from .service import get_profile, ingest_message, init_profile
@@ -45,11 +42,12 @@ class DemoHistoryItem(BaseModel):
 
 
 class DemoChatRequest(BaseModel):
-    public_id: str = Field(min_length=1, max_length=256)
+    user_id: str = Field(min_length=1, max_length=256)
     conversation_id: str = Field(min_length=1, max_length=256)
     message_id: str = Field(min_length=1, max_length=256)
     expected_profile_version: int = Field(ge=1)
     text: str = Field(min_length=1, max_length=4000)
+    model_provider: ModelProvider = "deepseek"
     history: list[DemoHistoryItem] = Field(default_factory=list, max_length=12)
 
 
@@ -71,14 +69,15 @@ def demo_auth(request: Request, response: Response,
             headers={"Retry-After": str(retry_after)},
         )
     if request.url.path in {"/demo/api/chat", "/demo/api/rules/test"}:
-        model_allowed, _, model_retry_after = _demo_model_rate_limiter.check(
+        model_allowed, model_remaining, model_retry_after = _demo_model_rate_limiter.check(
             source, settings.demo_model_rate_limit_per_minute
         )
         if not model_allowed:
             raise HTTPException(
-                status_code=429, detail="回应生成请求过于频繁",
+                status_code=429, detail="模型调用过于频繁",
                 headers={"Retry-After": str(model_retry_after)},
             )
+        response.headers["X-Model-RateLimit-Remaining"] = str(model_remaining)
     response.headers["X-Demo-RateLimit-Remaining"] = str(remaining)
     if not expected or not constant_time_equal(x_demo_code, expected):
         raise HTTPException(status_code=401, detail="访问密码不正确")
@@ -142,30 +141,9 @@ def _no_response_error(endpoint, exc: Exception) -> ModelNoResponseError:
     )
 
 
-def _turn_guidance(engine: dict) -> list[str]:
-    hints = engine.get("reply_hints", {})
-    guidance: list[str] = []
-    max_sentences = hints.get("max_sentences")
-    if isinstance(max_sentences, int) and 1 <= max_sentences <= 12:
-        guidance.append(f"回复尽量控制在 {max_sentences} 句以内")
-    if hints.get("answer_first") is True:
-        guidance.append("先直接回应用户当前的问题")
-    if hints.get("empathy_first") is True:
-        guidance.append("先自然回应用户当下的感受，再给信息或建议")
-    question_count = hints.get("question_count")
-    if isinstance(question_count, int) and 0 <= question_count <= 3:
-        guidance.append(f"最多使用 {question_count} 个必要问题")
-    humor_level = hints.get("humor_level")
-    if isinstance(humor_level, (int, float)) and not isinstance(humor_level, bool):
-        if humor_level <= 0.2:
-            guidance.append("避免主动使用玩笑")
-        elif humor_level >= 0.7:
-            guidance.append("在合适时可以加入轻微幽默")
-    return guidance or ["自然、简洁地回应用户当前表达"]
-
-
 def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
                     engine: dict, provider: ModelProvider) -> tuple[str, str]:
+    hints = engine["reply_hints"]
     try:
         endpoint = get_model_endpoint(provider)
     except ModelConfigurationError as exc:
@@ -175,14 +153,28 @@ def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
     if not endpoint.api_key:
         exc = ModelConfigurationError("未配置 OpenRouter API Key")
         raise _no_response_error(endpoint, exc) from exc
+    portrait = profile.get("portrait", {})
+    digital_code = profile.get("digital_code_profile", {})
     internal_context = {
-        "interaction_summary": public_dynamic_summary(profile),
-        "communication_preferences": public_preferences(profile),
-        "safe_indicators": [
-            {"name": item["name"], "value": item["value"]}
-            for item in public_metrics(profile)
-        ],
-        "turn_guidance": _turn_guidance(engine),
+        "reply_hints": hints,
+        "portrait_essence": portrait.get("essence", {}).get("content"),
+        "digital_code_profile": {
+            "code": digital_code.get("code"),
+            "confidence": digital_code.get("confidence"),
+            "domain_summaries": {
+                key: value.get("summary")
+                for key, value in digital_code.get("domains", {}).items()
+            },
+        } if digital_code.get("status") == "derived" else None,
+        "overall_confidence": profile.get("meta", {}).get("overall_confidence"),
+        "current_state": profile.get("runtime", {}).get("current_state", {}),
+        "interaction_preferences": profile.get("runtime", {}).get("interaction_preferences", {}),
+        "committed_memories_and_facts": profile.get("runtime", {}).get("memories", [])[-20:],
+        "current_semantic_frames": engine.get("semantic_frames", []),
+        "accepted_trait_signals": engine.get("accepted_trait_signals", []),
+        "applied_profile_patch": engine.get("profile_patch", []),
+        "runtime_operations": engine.get("runtime_operations", []),
+        "strategy_trace": engine.get("strategy_trace", {}),
     }
     system = (
         "你是温暖、自然、有边界感的陪伴型聊天机器人。根据内部互动策略回答用户，但绝不能提到画像、规则、"
@@ -190,11 +182,10 @@ def _generate_reply(text: str, history: list[DemoHistoryItem], profile: dict,
         "只有回答确实缺少关键条件，或用户明显想继续展开时，才自然问一个问题。不要每次都用问题结尾。"
         "像朋友聊天一样，可以直接回应、分享看法、轻微调侃或自然停住；避免反复使用‘听起来……你觉得呢/你希望哪种/要不要’模板。"
         "除非用户要求方案或内容本身需要步骤，否则使用自然短段落，不加标题、清单、总结或固定的共情—分析—追问结构。"
-        "执行优先级是：安全要求和用户当前明确诉求 > 当前状态与明确偏好 > 本轮互动指引 > 长期互动倾向。"
-        "互动指引只用于决定目标、禁区与表达结构，不能复制成固定话术，也不能强化用户的防御模式。"
+        "执行优先级是：安全要求和用户当前明确诉求 > 当前状态与明确偏好 > turn_plan中的本轮活跃模块 > 长期画像。"
+        "turn_plan和场景案例只用于决定目标、禁区与表达结构，不能复制成固定话术，也不能强化用户的防御模式。"
         "除非用户明确要求，避免说教、诊断和长篇建议。只把已提交的事实当作长期记忆；不要根据学校、职业等身份做刻板推断。"
-        "系统没有提供检索结果时，必须明确说明信息可能不是实时的，不得声称掌握最新动态。"
-        "可用的中性互动摘要如下：\n"
+        "如果 requires_fresh_information=true，而系统没有提供检索结果，必须明确说明信息可能不是实时的，不得声称‘最近’或‘当前行情’。内部策略如下：\n"
         + json.dumps(internal_context, ensure_ascii=False)
     )
     messages = [{"role": "system", "content": system}]
@@ -253,9 +244,21 @@ def demo_start(body: DemoStartRequest, request: Request, tenant_id: str = Depend
 @router.post("/chat")
 def demo_chat(body: DemoChatRequest, request: Request, tenant_id: str = Depends(demo_auth),
               db: Session = Depends(get_db)) -> dict:
-    provider = get_settings().default_model_provider
-    user = resolve_public_user(db, tenant_id, body.public_id)
-    conversation = resolve_public_conversation(db, user, body.conversation_id)
+    user = db.scalar(select(User).where(
+        User.tenant_id == tenant_id, User.tenant_user_id == body.user_id
+    ))
+    if not user:
+        raise HTTPException(status_code=404, detail="人物不存在")
+    conversation = db.scalar(select(Conversation).where(
+        Conversation.user_id == user.id, Conversation.external_id == body.conversation_id
+    ))
+    if not conversation:
+        conversation = Conversation(
+            user_id=user.id, external_id=body.conversation_id,
+            title=body.text[:24] + ("…" if len(body.text) > 24 else ""),
+        )
+        db.add(conversation)
+        db.flush()
     existing_message = db.scalar(select(ChatMessage).where(
         ChatMessage.conversation_id == conversation.id,
         ChatMessage.external_id == body.message_id,
@@ -269,16 +272,15 @@ def demo_chat(body: DemoChatRequest, request: Request, tenant_id: str = Depends(
             ChatMessage.external_id == assistant_message_id,
         ))
         if existing_assistant:
-            profile_version = existing_assistant.profile_version or body.expected_profile_version
+            cached_engine = existing_assistant.engine_trace or {}
             return {
-                "assistant_reply": sanitize_public_text(
-                    existing_assistant.content,
-                    fallback="我在认真听，你可以继续说。",
+                "request_id": request.state.request_id,
+                "assistant_reply": existing_assistant.content,
+                "assistant_message_id": assistant_message_id,
+                "chat_responder_version": cached_engine.get("strategy_trace", {}).get(
+                    "chat_responder", "cached-response"
                 ),
-                "profile_version": profile_version,
-                "update_summary": public_update_summary(
-                    profile_version, body.expected_profile_version
-                ),
+                "engine": cached_engine,
             }
     if not existing_message:
         existing_message = ChatMessage(
@@ -292,38 +294,34 @@ def demo_chat(body: DemoChatRequest, request: Request, tenant_id: str = Depends(
     engine = existing_message.engine_trace
     if engine is None:
         message = MessageIngestRequest(
-            conversation_id=conversation.external_id,
+            conversation_id=body.conversation_id,
             message_id=body.message_id,
             expected_profile_version=body.expected_profile_version,
             occurred_at=datetime.now(timezone.utc),
             text=body.text,
-            model_provider=provider,
+            model_provider=body.model_provider,
             context=MessageContext(
                 previous_turn_count=len(body.history),
                 recent_turns=[ConversationTurn(role=item.role, content=item.content) for item in body.history[-12:]],
             ),
         )
         try:
-            engine = ingest_message(
-                db, tenant_id, user.tenant_user_id, message, _current_pack(request, db),
-                request.state.request_id,
-                f"demo-chat-{user.tenant_user_id}-{body.message_id}",
-            )
+            engine = ingest_message(db, tenant_id, body.user_id, message, _current_pack(request, db),
+                                    request.state.request_id, f"demo-chat-{body.user_id}-{body.message_id}")
         except SemanticExtractorError as exc:
             logger.warning("Semantic extraction unavailable; using deterministic fallback: %s", exc)
             engine = ingest_message(
-                db, tenant_id, user.tenant_user_id, message, _current_pack(request, db),
-                request.state.request_id,
-                f"demo-chat-{user.tenant_user_id}-{body.message_id}",
+                db, tenant_id, body.user_id, message, _current_pack(request, db),
+                request.state.request_id, f"demo-chat-{body.user_id}-{body.message_id}",
                 semantic_extractor=DeterministicSemanticExtractor(),
             )
-            engine["strategy_trace"]["semantic_fallback"] = "external_analysis_unavailable"
+            engine["strategy_trace"]["semantic_fallback"] = f"{body.model_provider}_unavailable"
     else:
         engine["strategy_trace"].pop("chat_model_error", None)
-    current = get_profile(db, tenant_id, user.tenant_user_id)["profile"]
-    engine["strategy_trace"]["model_provider"] = provider
+    current = get_profile(db, tenant_id, body.user_id)["profile"]
+    engine["strategy_trace"]["model_provider"] = body.model_provider
     try:
-        reply, responder = _generate_reply(body.text, body.history, current, engine, provider)
+        reply, responder = _generate_reply(body.text, body.history, current, engine, body.model_provider)
     except ModelNoResponseError as exc:
         engine["strategy_trace"]["consumed_by_chatbot"] = False
         engine["strategy_trace"]["chat_responder"] = "no-response"
@@ -337,28 +335,28 @@ def demo_chat(body: DemoChatRequest, request: Request, tenant_id: str = Depends(
         conversation.updated_at = datetime.now(timezone.utc)
         db.commit()
         return JSONResponse(status_code=502, content={
-            "code": "assistant_temporarily_unavailable",
-            "message": "暂时无法生成回复，请稍后重试。",
-            "profile_version": engine["profile_version"],
-            "update_summary": public_update_summary(
-                engine["profile_version"], body.expected_profile_version
-            ),
+            "request_id": request.state.request_id,
+            "code": "model_no_response",
+            "message": str(exc),
+            "details": {
+                "provider": exc.provider,
+                "model": exc.model,
+                "http_status": exc.http_status,
+                "upstream_message": exc.upstream_message,
+                "profile_version": engine["profile_version"],
+                "engine": engine,
+            },
         })
     engine["strategy_trace"]["consumed_by_chatbot"] = True
     engine["strategy_trace"]["chat_responder"] = responder
     existing_message.engine_trace = None
-    public_reply = sanitize_public_text(reply, fallback="我在认真听，你可以继续说。")
     db.add(ChatMessage(
         conversation_id=conversation.id, external_id=assistant_message_id,
-        role="assistant", content=public_reply, engine_trace=engine,
+        role="assistant", content=reply, engine_trace=engine,
         profile_version=engine["profile_version"],
     ))
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
-    return {
-        "assistant_reply": public_reply,
-        "profile_version": engine["profile_version"],
-        "update_summary": public_update_summary(
-            engine["profile_version"], body.expected_profile_version
-        ),
-    }
+    return {"request_id": request.state.request_id, "assistant_reply": reply,
+            "assistant_message_id": assistant_message_id,
+            "chat_responder_version": responder, "engine": engine}

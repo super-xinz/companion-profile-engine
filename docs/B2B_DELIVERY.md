@@ -6,8 +6,8 @@
 
 | 环境 | 访问者 | Demo/规则工作台 | OpenAPI | 整用户重置 | 数据库 |
 | --- | --- | --- | --- | --- | --- |
-| 团队验收/演示 | 产品、研发、Leader | 仅开启安全展示页并使用强访问码 | 关闭 | 关闭 | 独立 PostgreSQL |
-| 客户生产 API | 客户服务端 BFF | 关闭 | 关闭 | 关闭 | 独立 PostgreSQL |
+| 团队验收/演示 | 产品、研发、Leader | 开启并使用强访问码 | 开启 | 按需开启 | 独立 PostgreSQL |
+| 客户生产 API | 客户服务端 BFF | 关闭 | 默认关闭或仅内网开放 | 关闭 | 独立 PostgreSQL |
 
 当前 Zeabur `companion-profile-engine` 项目适合作为团队验收环境。正式客户建议新建 Project 或至少新建独立 Service + PostgreSQL，避免演示人物、规则操作和客户真实数据混在一起。
 
@@ -56,7 +56,6 @@ PROFILE_GEMINI_MODEL=google/gemini-3.1-pro-preview
 PROFILE_KIMI_MODEL=moonshotai/kimi-k3
 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true
 PROFILE_DEMO_FEATURES_ENABLED=false
-PROFILE_RULE_WORKBENCH_ENABLED=false
 PROFILE_API_DOCS_ENABLED=false
 PROFILE_ALLOW_PROFILE_RESET=false
 PROFILE_RATE_LIMIT_PER_MINUTE=120
@@ -67,7 +66,7 @@ PROFILE_MAX_REQUEST_BODY_BYTES=2500000
 PROFILE_IDEMPOTENCY_TTL_HOURS=24
 ```
 
-团队验收环境只可按需设置 `PROFILE_DEMO_FEATURES_ENABLED=true`，同时必须配置强 `PROFILE_DEMO_ACCESS_CODE`、服务器端回答密钥和隔离的演示租户。规则工作台、在线 OpenAPI 和整用户重置保持关闭。
+团队验收环境可以把三个功能开关设置为 `true`，但必须配置强 `PROFILE_DEMO_ACCESS_CODE`，并且不得使用客户生产数据库。
 
 ## 5. 当前安全与可靠性保证
 
