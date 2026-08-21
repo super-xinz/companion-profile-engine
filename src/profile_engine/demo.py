@@ -217,7 +217,7 @@ def demo_start(body: DemoStartRequest, request: Request, tenant_id: str = Depend
     )
     db.add(conversation)
     db.commit()
-    public_summary = get_public_profile(db, tenant_id, user_id)["profile"]["summary"]
+    public_summary = get_public_profile(db, tenant_id, user_id)["profile"]["portrait"]
     return {
         "user_id": user_id,
         "profile_version": response["profile_version"],

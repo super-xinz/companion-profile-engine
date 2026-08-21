@@ -112,11 +112,11 @@
     <form class="modal-card" id="enneagramForm">
       <button type="button" class="modal-close" data-close-modal="enneagramModal">×</button>
       <span class="eyebrow">内部参考模型 · 不进入默认画像</span>
-      <h2 id="enneagramModalTitle">维护九型类型参考</h2>
+      <h2 id="enneagramModalTitle">维护辅助类型参考</h2>
       <p>仅记录用户声明、授权测评或专家确认的结果。它不会自动分类，也不会在缺少独立对话证据时决定聊天回答。</p>
-      <label class="form-field"><span>主型</span><select name="core_type" required><option value="1">1 完美型</option><option value="2">2 助人型</option><option value="3">3 成就型</option><option value="4">4 自我型</option><option value="5">5 观察型</option><option value="6">6 忠诚型</option><option value="7">7 探索型</option><option value="8">8 挑战型</option><option value="9">9 和平型</option></select></label>
-      <label class="form-field"><span>侧翼（选填）</span><select name="wing"><option value="">无/待确认</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option></select></label>
-      <label class="form-field"><span>本能叠层</span><select name="stack"><option value="SX/SO">SX/SO</option><option value="SX/SP">SX/SP</option><option value="SP/SX">SP/SX</option><option value="SP/SO">SP/SO</option><option value="SO/SX">SO/SX</option><option value="SO/SP">SO/SP</option></select></label>
+      <label class="form-field"><span>动机模式</span><select name="core_type" required><option value="1">1 标准导向</option><option value="2">支持导向</option><option value="3">成就导向</option><option value="4">独特性导向</option><option value="5">理解导向</option><option value="6">安全导向</option><option value="7">探索导向</option><option value="8">自主导向</option><option value="9">协调导向</option></select></label>
+      <label class="form-field"><span>相邻特征（选填）</span><select name="wing"><option value="">无/未确认</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option></select></label>
+      <label class="form-field"><span>互动偏好组合</span><select name="stack"><option value="SX/SO">SX/SO</option><option value="SX/SP">SX/SP</option><option value="SP/SX">SP/SX</option><option value="SP/SO">SP/SO</option><option value="SO/SX">SO/SX</option><option value="SO/SP">SO/SP</option></select></label>
       <label class="form-field"><span>来源</span><select name="source"><option value="expert_confirmed">专家确认</option><option value="external_assessment">外部测评</option><option value="user_supplied">用户声明</option></select></label>
       <label class="form-field"><span>维护原因</span><textarea name="reason" required rows="3" maxlength="1000" placeholder="例如：专家复核测评结果"></textarea></label>
       <button class="button primary wide" type="submit">保存内部参考</button>

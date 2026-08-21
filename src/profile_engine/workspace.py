@@ -216,32 +216,58 @@ def _ensure_conversation(db: Session, user: User, external_id: str | None = None
     return item
 
 
+def _ensure_single_template_conversation(db: Session, user: User, title: str) -> Conversation:
+    """Keep one empty seed conversation while preserving every conversation with messages."""
+    candidates = db.scalars(select(Conversation).where(
+        Conversation.user_id == user.id,
+        Conversation.title == title,
+        Conversation.status == "active",
+    ).order_by(Conversation.created_at)).all()
+    if not candidates:
+        return _ensure_conversation(db, user, title=title)
+
+    with_messages = []
+    empty = []
+    for item in candidates:
+        count = db.scalar(select(func.count()).select_from(ChatMessage).where(
+            ChatMessage.conversation_id == item.id
+        )) or 0
+        (with_messages if count else empty).append(item)
+    if with_messages:
+        for item in empty:
+            item.status = "archived"
+        return with_messages[0]
+    keep = empty[0]
+    for item in empty[1:]:
+        item.status = "archived"
+    return keep
+
+
 def _sync_template_people(db: Session, tenant_id: str, pack, ensure_conversation: bool = True) -> None:
     for person in TEMPLATE_PEOPLE:
-        if not person.enneagram:
-            continue
         user = db.scalar(select(User).where(User.tenant_id == tenant_id, User.tenant_user_id == person.user_id))
         if not user:
             continue
-        profile = get_profile(db, tenant_id, user.tenant_user_id)["profile"]
-        enneagram = profile.get("enneagram_profile", {})
-        desired_code = (
-            f"{person.enneagram['primary_instinct']}/{person.enneagram['secondary_instinct']}｜"
-            f"{person.enneagram['core_type']}w{person.enneagram['wing']}"
-        )
-        current_code = enneagram.get("identity", {}).get("code")
-        if enneagram.get("status") != "confirmed" or current_code != desired_code:
-            set_enneagram_profile(
-                db, tenant_id, user.tenant_user_id,
-                SetEnneagramRequest(
-                    expected_profile_version=current_version(db, user).version_no,
-                    enneagram=person.enneagram,
-                    reason="模板人物同步九型互动画像",
-                ),
-                pack, f"seed-sync_{uuid.uuid4().hex}", f"seed-sync-{tenant_id}-{user.tenant_user_id}",
+        if person.enneagram:
+            profile = get_profile(db, tenant_id, user.tenant_user_id)["profile"]
+            enneagram = profile.get("enneagram_profile", {})
+            desired_code = (
+                f"{person.enneagram['primary_instinct']}/{person.enneagram['secondary_instinct']}｜"
+                f"{person.enneagram['core_type']}w{person.enneagram['wing']}"
             )
+            current_code = enneagram.get("identity", {}).get("code")
+            if enneagram.get("status") != "confirmed" or current_code != desired_code:
+                set_enneagram_profile(
+                    db, tenant_id, user.tenant_user_id,
+                    SetEnneagramRequest(
+                        expected_profile_version=current_version(db, user).version_no,
+                        enneagram=person.enneagram,
+                        reason="模板人物同步九型互动画像",
+                    ),
+                    pack, f"seed-sync_{uuid.uuid4().hex}", f"seed-sync-{tenant_id}-{user.tenant_user_id}",
+                )
         if ensure_conversation:
-            _ensure_conversation(db, user, title=f"{person.display_name}的第一段对话")
+            _ensure_single_template_conversation(db, user, title=f"{person.display_name}的第一段对话")
 
 
 def _seed_people(db: Session, tenant_id: str, request: Request) -> None:

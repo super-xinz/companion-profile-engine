@@ -22,12 +22,19 @@ def idem(value: str) -> dict:
     return {**HEADERS, "Idempotency-Key": value}
 
 
+def public_dimension(profile: dict, key: str) -> dict | None:
+    return next((
+        item for group in profile.get("dimension_details", [])
+        for item in group.get("items", []) if item.get("key") == key
+    ), None)
+
+
 def test_public_profile_hides_reference_models_and_turn_summary_explains_changes():
     user = f"public-{uuid.uuid4().hex}"
     with TestClient(app) as client:
         initialized = client.post("/v1/profiles:init", headers=idem(f"init-{user}"), json={
             "tenant_user_id": user,
-            "birth_date": "1998-12-06",
+            "birth_date": "1997-05-17",
             "enneagram": {
                 "core_type": 7, "wing": 6,
                 "primary_instinct": "SX", "secondary_instinct": "SO",
@@ -46,11 +53,9 @@ def test_public_profile_hides_reference_models_and_turn_summary_explains_changes
         ):
             assert hidden not in profile
         assert "birth_date" not in profile["identity"]
-        trait = profile["stable_tendencies"]["action_mode"]["structure_pref"]
-        assert "value" not in trait and "confidence" not in trait
-        assert trait["evidence_grade"] == "unverified"
-        assert trait["direction"] == "unknown"
-        assert trait["tendency"] == "证据待积累"
+        assert profile["display_mode"] == "narrative_portrait"
+        assert "summary" not in profile
+        assert public_dimension(profile, "structure_pref") is None
 
         update = client.post(
             f"/v1/profiles/{user}/messages:ingest",
@@ -72,9 +77,35 @@ def test_public_profile_hides_reference_models_and_turn_summary_explains_changes
         assert "场景表现依据" in summary["maintenance"]
 
         public = client.get(f"/v1/public-profiles/{user}", headers=HEADERS).json()["profile"]
-        trait = public["stable_tendencies"]["action_mode"]["structure_pref"]
-        assert trait["evidence_grade"] == "emerging"
-        assert trait["basis"]["self_report"] == 1
+        trait = public_dimension(public, "structure_pref")
+        assert trait is not None
+        assert "待观察" not in trait["tendency"]
+        assert "证据" not in trait["tendency"]
+
+
+def test_bundled_showcase_people_have_complete_scientific_public_portraits():
+    with TestClient(app) as client:
+        for birth_date in ("1988-08-09", "1989-10-15", "1989-11-28", "1996-03-28", "1998-12-06"):
+            user = f"person-{birth_date}"
+            initialized = client.post("/v1/profiles:init", headers=idem(f"init-{user}"), json={
+                "tenant_user_id": user,
+                "display_name": birth_date,
+                "birth_date": birth_date,
+                "consent": {"profile": True, "sensitive_inference": True},
+            })
+            assert initialized.status_code == 200, initialized.text
+            profile = client.get(f"/v1/public-profiles/{user}", headers=HEADERS).json()["profile"]
+            assert profile["meta"]["complete_baseline"] is True
+            assert sum(len(group["items"]) for group in profile["dimension_details"]) == 17
+            assert sum(len(group["items"]) for group in profile["scenario_matrix"]) == 18
+            assert len(profile["operating_model"]) == 5
+            assert profile["portrait"]["headline"]
+            assert profile["portrait"]["tags"]
+            assert profile["interaction_guide"]["communication_style"]
+            serialized = str(profile)
+            for hidden_term in ("MBTI", "ENFP", "ENTP", "ESFJ", "ISTJ", "八字", "伤官", "正官",
+                                "初步观察", "待观察", "证据待积累", "纯种", "爆表", "碾压", "天下无敌"):
+                assert hidden_term not in serialized
 
 
 def test_reply_prompt_excludes_reference_models(monkeypatch):

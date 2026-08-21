@@ -27,8 +27,8 @@ from .rule_compiler import CompiledRulePack
 from .rule_bank import extract_signals, fragments_for_code
 from .schemas import (CorrectionRequest, ForgetRequest, MessageIngestRequest, ProfileInitRequest,
                       ReplyGuidance, SemanticFrame, SetEnneagramRequest, TraitSignal)
-from .source_profiles import apply_source_profile
-from .template_people import template_person_for_birth_date
+from .source_profiles import apply_source_profile, hydrate_source_sections
+from .template_people import TEMPLATE_USER_IDS, template_person_for_birth_date
 
 
 class NotFoundError(Exception):
@@ -266,6 +266,8 @@ def normalize_profile_snapshot(profile: dict, user: User, pack: RulePack | None 
             _digital_code_context(birth_date, pack)[2]
             if pack and birth_date else empty_digital_code_profile()
         )
+    if isinstance(profile.get("source_profile_document"), dict):
+        hydrate_source_sections(profile)
     return profile
 
 
@@ -328,7 +330,11 @@ def get_public_profile(db: Session, tenant_id: str, tenant_user_id: str) -> dict
     internal = get_profile(db, tenant_id, tenant_user_id)
     return {
         "profile_version": internal["profile_version"],
-        "profile": build_public_profile(internal["profile"], _evidence_summary_by_path(db, user)),
+        "profile": build_public_profile(
+            internal["profile"],
+            _evidence_summary_by_path(db, user),
+            showcase_baseline=user.tenant_user_id in TEMPLATE_USER_IDS,
+        ),
         "rule_pack_versions": internal["rule_pack_versions"],
     }
 

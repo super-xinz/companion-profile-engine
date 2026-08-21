@@ -100,6 +100,11 @@ def test_multi_person_profile_and_rule_workspaces():
 
             refreshed = client.post("/demo/api/workspace/bootstrap", headers=headers)
             assert refreshed.status_code == 200, refreshed.text
+            template_people = [
+                person for person in refreshed.json()["people"] if person["user_id"] in template_ids
+            ]
+            assert template_people
+            assert all(person["conversation_count"] == 1 for person in template_people)
             restored = client.get("/demo/api/people/person-1996-03-28", headers=headers)
             assert restored.status_code == 200, restored.text
             assert "enneagram_profile" not in restored.json()["profile"]

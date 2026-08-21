@@ -47,7 +47,7 @@ const auditActionLabels = {
   "profile.correct": "本人更正", "profile.manual_override": "人工确认",
   "profile.enneagram.set": "更新授权参考", "profile.forget.memory": "删除记忆",
   "profile.forget.evidence": "撤回依据", "profile.forget.birth_inference": "清除出生信息先验",
-  "profile.forget.enneagram": "清除类型参考", "profile.forget.all_profile": "清除全部画像"
+  "profile.forget.enneagram": "清除辅助类型参考", "profile.forget.all_profile": "清除全部画像"
 };
 const predicateLabels = {
   socializing_requires_solitude_recovery: "社交后需要独处恢复", likes_social_gathering: "喜欢社交聚会",
@@ -126,7 +126,7 @@ function renderPeople(filter = "") {
   $("#peopleList").innerHTML = items.length ? items.map(person => `
     <button class="person-item ${appState.person?.user_id === person.user_id ? "active" : ""}" data-person-id="${esc(person.user_id)}">
       <span class="avatar">${esc(initials(person.display_name))}</span>
-      <span><b>${esc(person.display_name)}</b><small>画像 v${person.profile_version} · ${person.conversation_count} 段对话</small></span>
+      <span><b>${esc(person.display_name)}</b><small>${person.conversation_count} 段对话 · 画像已同步</small></span>
     </button>`).join("") : `<div class="empty-panel"><span>⌕</span><b>没有找到人物</b><p>换个名字搜索试试。</p></div>`;
   $$(".person-item").forEach(button => button.onclick = () => selectPerson(button.dataset.personId));
 }
@@ -154,8 +154,8 @@ async function selectPerson(userId) {
   appState.lastEngine = null;
   $("#personName").textContent = detail.person.display_name;
   $("#personAvatar").textContent = initials(detail.person.display_name);
-  $("#personMeta").textContent = `画像 v${detail.profile_version} · 证据${detail.profile.summary?.evidence_level || "待积累"}`;
-  $("#inspectorSubtitle").textContent = `${detail.person.display_name} · 当前画像 v${detail.profile_version}`;
+  $("#personMeta").textContent = `${detail.person.conversation_count} 段对话 · 个体画像持续更新`;
+  $("#inspectorSubtitle").textContent = `${detail.person.display_name} · 人物画像`;
   $("#messageInput").disabled = false;
   $("#sendBtn").disabled = false;
   renderPeople($("#peopleSearch").value);
@@ -310,8 +310,8 @@ async function reloadProfile() {
   appState.version = detail.profile_version;
   appState.audit = null;
   appState.expertReference = null;
-  $("#personMeta").textContent = `画像 v${detail.profile_version} · 证据${detail.profile.summary?.evidence_level || "待积累"}`;
-  $("#inspectorSubtitle").textContent = `${detail.person.display_name} · 当前画像 v${detail.profile_version}`;
+  $("#personMeta").textContent = `${detail.person.conversation_count} 段对话 · 个体画像持续更新`;
+  $("#inspectorSubtitle").textContent = `${detail.person.display_name} · 人物画像`;
   renderProfile(detail.manual_overrides || []);
   renderExpertPlaceholder();
 }
@@ -440,66 +440,69 @@ function renderProfile(overrides = []) {
     return;
   }
   const locked = new Set(overrides.map(item => item.target_path));
-  const categories = Object.entries(profile.stable_tendencies || {});
-  const memories = profile.facts_and_memories || [];
-  const prefs = profile.interaction?.preferences || {};
-  const states = profile.interaction?.current_state || {};
-  const scenarios = Object.entries(profile.scenario_observations || {}).flatMap(([group, items]) =>
-    Object.entries(items).map(([key, value]) => ({group, key, ...value}))
-  );
-  const communication = profile.communication_observations || [];
-  const summary = profile.summary || {};
+  const portrait = profile.portrait || {};
+  const operating = profile.operating_model || [];
+  const tensions = profile.core_tensions || [];
+  const scenarios = profile.scenario_matrix || [];
+  const guide = profile.interaction_guide || {};
+  const communication = guide.communication_style || [];
+  const prefs = guide.preferences || {};
+  const states = guide.current_state || {};
+  const context = profile.life_context || {};
+  const dimensions = profile.dimension_details || [];
   const hasInteraction = Object.keys(prefs).length || Object.keys(states).length;
+  const section = (index, title, subtitle, content, className = "") => `
+    <section class="portrait-section ${className}">
+      <div class="portrait-section-head"><span>${String(index).padStart(2,"0")}</span><div><b>${esc(title)}</b>${subtitle ? `<small>${esc(subtitle)}</small>` : ""}</div></div>
+      ${content}
+    </section>`;
+  const strengthMarkup = (portrait.strengths || []).length ? `
+    <div class="portrait-list-card strength-card"><small>容易发挥的优势</small><div>${portrait.strengths.map(item => `<span>${esc(item)}</span>`).join("")}</div></div>` : "";
+  const costMarkup = (portrait.potential_costs || []).length ? `
+    <div class="portrait-list-card cost-card"><small>高强度情境下的代价</small><div>${portrait.potential_costs.map(item => `<span>${esc(item)}</span>`).join("")}</div></div>` : "";
+  const contextGroups = context.groups || [];
+  const roles = context.collaboration_roles || [];
   view.innerHTML = `
-    <div class="profile-overview">
-      <div class="profile-stat"><small>画像版本</small><b>v${profile.meta?.profile_version || appState.version}</b></div>
-      <div class="profile-stat"><small>证据状态</small><b class="stat-word">${esc(summary.evidence_level || "待积累")}</b></div>
-      <div class="profile-stat"><small>已有依据维度</small><b>${summary.observed_dimensions || 0}<em> / ${summary.total_dimensions || 17}</em></b></div>
-      <div class="profile-stat"><small>事实与记忆</small><b>${memories.length}</b></div>
-    </div>
-    <section class="portrait-summary-card"><small>当前整体观察</small><p>${esc(summary.overall_observation || "对话证据仍在积累。")}</p><span>行为观察，不是诊断或固定人格标签</span></section>
+    ${section(1, "人物核心印象", "先看见一个完整的人", `
+      <div class="portrait-hero">
+        <span class="portrait-kicker">核心画像</span>
+        <h3>${esc(portrait.headline || "个体画像")}</h3>
+        <p>${esc(portrait.summary || "")}</p>
+        <div class="portrait-tags">${(portrait.tags || []).map(tag => `<span>${esc(tag)}</span>`).join("")}</div>
+      </div>
+      <div class="portrait-split">${strengthMarkup}${costMarkup}</div>`)}
 
-    <div class="trait-section">
-      <div class="section-heading"><b>当前互动建议</b><small>明确偏好优先 · 状态会过期</small></div>
-      ${hasInteraction ? `<div class="inspector-card"><div class="data-grid public-data-grid">
-        ${Object.entries(prefs).map(([key,value]) => `<label>${esc(preferenceLabels[key] || key)}</label><span>${preferenceValueLabel(key,value)} <i class="basis-badge confirmed">本人明确</i></span>`).join("")}
-        ${Object.entries(states).map(([key,item]) => `<label>${esc(stateLabels[key] || key)}</label><span>${esc(stateValueLabel(key,item.value))} <i class="basis-badge emerging">短期</i><small>有效至 ${esc(item.expires_at?.slice(0,16).replace("T"," ") || "自动失效")}</small></span>`).join("")}
-      </div></div>` : `<div class="inspector-card empty-evidence"><b>暂时没有特别的互动要求</b><small>用户明确提出长度、直接程度、倾听顺序或追问偏好后，会立即显示在这里。</small></div>`}
-    </div>
+    ${operating.length ? section(2, "这个人如何运转", "能量、认知、决策、执行与关系", `
+      <div class="operating-grid">${operating.map(item => `<article class="operating-card">
+        <b>${esc(item.title)}</b><p>${esc(item.summary)}</p><div>${(item.drivers || []).map(driver => `<span>${esc(driver)}</span>`).join("")}</div>
+      </article>`).join("")}</div>`) : ""}
 
-    <div class="trait-section">
-      <div class="section-heading"><b>稳定行为倾向</b><small>按证据充分度分层</small></div>
-      ${categories.map(([category, traits]) => `<details class="profile-group" open><summary><b>${esc(categoryLabels[category] || category)}</b><span>${Object.values(traits).filter(item => item.evidence_grade !== "unverified").length} 项已有依据</span></summary>
-        <div class="profile-group-body">${Object.entries(traits).map(([key,item]) => `
-          <div class="public-trait-row ${esc(item.evidence_grade)}" title="${esc(item.evidence_count)} 条非先验证据">
-            <span><b>${esc(item.label || traitLabels[key] || key)}</b><small>${esc(item.tendency)}</small></span>
-            <div class="public-trait-track"><i class="midline"></i><span style="left:${item.position || 50}%"></span></div>
-            <i class="basis-badge ${esc(item.evidence_grade)}">${esc(item.evidence_grade_label)}</i>
-            <button class="edit-trait" data-path="${esc(item.editable_path)}" data-label="${esc(item.label || traitLabels[key] || key)}" aria-label="编辑${esc(item.label || traitLabels[key] || key)}">${locked.has(item.editable_path) ? "◆" : "✎"}</button>
-          </div>`).join("")}</div>
-      </details>`).join("")}
-    </div>
+    ${tensions.length ? section(3, "人物的核心张力", "优势与代价往往来自同一套机制", `
+      <div class="tension-list">${tensions.map(item => `<article class="tension-card"><b>${esc(item.title)}</b><p>${esc(item.description)}</p></article>`).join("")}</div>`) : ""}
 
-    <div class="trait-section">
-      <div class="section-heading"><b>场景表现</b><small>工作、关系与压力情境</small></div>
-      ${scenarios.length ? scenarios.map(item => `<div class="observation-card"><div><b>${esc(scenarioLabels[item.key] || item.key)}</b><i class="basis-badge ${esc(item.evidence_grade)}">${esc(item.evidence_grade_label)}</i></div><p>${esc(item.observation)}</p><small>${esc(item.basis)}${item.evidence_count ? ` · ${item.evidence_count} 条直接依据` : ""}</small></div>`).join("") : `<div class="inspector-card empty-evidence"><b>场景证据仍在积累</b><small>只有直接观察或已有行为证据支持的场景才会出现在这里。</small></div>`}
-    </div>
+    ${scenarios.length ? section(4, "不同场景下的表现", "工作、关系与压力中的具体模式", `
+      <div class="scenario-matrix">${scenarios.map(group => `<details class="scenario-group" open><summary><b>${esc(group.label)}</b><span>${group.items.length} 个场景</span></summary><div>
+        ${group.items.map(item => `<article class="scenario-row"><b>${esc(item.label)}</b><p>${esc(item.pattern)}</p></article>`).join("")}
+      </div></details>`).join("")}</div>`) : ""}
 
-    <div class="trait-section">
-      <div class="section-heading"><b>表达与沟通特点</b><small>至少3次同类样本后展示</small></div>
-      ${communication.length ? communication.map(item => `<div class="observation-card"><div><b>${esc(item.label)}</b><i class="basis-badge ${esc(item.evidence_grade)}">${esc(item.evidence_grade_label)}</i></div><small>${item.sample_count} 次同类表达样本</small></div>`).join("") : `<div class="inspector-card empty-evidence"><b>暂未形成稳定表达观察</b><small>单次措辞不会被直接定性。</small></div>`}
-    </div>
+    ${section(5, "如何与这个人相处", "把理解转化为可执行的沟通方式", `
+      ${(guide.tips || []).length ? `<ul class="guide-list">${guide.tips.map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
+      ${hasInteraction ? `<div class="interaction-strip">${Object.entries(prefs).map(([key,value]) => `<span><small>${esc(preferenceLabels[key] || key)}</small>${preferenceValueLabel(key,value)}</span>`).join("")}${Object.entries(states).map(([key,item]) => `<span><small>${esc(stateLabels[key] || key)}</small>${esc(stateValueLabel(key,item.value))}</span>`).join("")}</div>` : ""}
+      ${communication.length ? `<div class="communication-stack">${communication.map(item => `<article class="communication-card"><b>${esc(item.label)}</b><p>${esc(item.description)}</p>${item.example ? `<small>${esc(item.example)}</small>` : ""}</article>`).join("")}</div>` : ""}`)}
 
-    <div class="trait-section">
-      <div class="section-heading"><b>事实与重要记忆</b><small>${memories.length} 条</small></div>
-      <div class="inspector-card"><div class="data-grid"><label>称呼</label><span>${esc(profile.identity?.display_name || "未填写")}</span><label>时区</label><span>${esc(profile.identity?.timezone || "未填写")}</span></div></div>
-      ${memories.length ? memories.map(item => `<div class="memory-item"><b>${esc(item.key || item.type || "重要信息")}</b><p>${esc(item.value || item.summary || item.predicate || "")}</p><small>${item.type === "event" ? "事件记录" : "用户明确事实"}</small></div>`).join("") : `<div class="inspector-card empty-evidence"><small>尚未记录其他长期事实或重要事件。</small></div>`}
-    </div>
+    ${(contextGroups.length || roles.length) ? section(6, "事实、目标与重要经历", "把零散信息整理成可使用的上下文", `
+      ${contextGroups.map(group => `<div class="context-group"><b>${esc(group.label)}</b>${group.items.map(item => `<article><small>${esc(item.label)}</small><p>${esc(item.content)}</p></article>`).join("")}</div>`).join("")}
+      ${roles.length ? `<div class="role-card"><small>更容易发挥价值的协作位置</small><div>${roles.map(role => `<span>${esc(role)}</span>`).join("")}</div></div>` : ""}`) : ""}
 
-    <div class="trait-section">
-      <div class="section-heading"><b>依据与变化</b><small>可追溯 · 可更正</small></div>
-      <div class="inspector-card evidence-policy"><p>默认画像只展示本人明确表达、对话观察和可更正事实。出生信息先验、类型框架和原始资料已移至“专家参考”，不会作为科学事实展示，也不会直接决定回答。</p><small>最近整理：${esc(profile.meta?.updated_at?.replace("T"," ").slice(0,19) || "—")}</small></div>
-    </div>`;
+    ${dimensions.length ? section(7, "17维行为结构", "完整结构放在最后，人物叙事优先", `
+      <div class="dimension-groups">${dimensions.map((group,index) => `<details class="dimension-group" ${index === 0 ? "open" : ""}><summary><b>${esc(group.label)}</b><span>${group.items.length} 个维度</span></summary><div>
+        ${group.items.map(item => `<article class="dimension-row">
+          <div class="dimension-row-head"><span><b>${esc(item.label)}</b><small>${esc(item.tendency)}</small></span><button class="edit-trait" data-path="${esc(item.editable_path)}" data-label="${esc(item.label)}" aria-label="编辑${esc(item.label)}">${locked.has(item.editable_path) ? "◆" : "✎"}</button></div>
+          <div class="dimension-poles"><span>${esc(item.low_label)}</span><span>${esc(item.high_label)}</span></div>
+          <div class="dimension-track"><span style="left:${item.position ?? 50}%"></span></div>
+          <p>${esc(item.description)}</p>
+        </article>`).join("")}
+      </div></details>`).join("")}</div>`) : ""}`;
   $$(".edit-trait", view).forEach(button => button.onclick = () =>
     openEdit(button.dataset.path, button.dataset.label).catch(error => toast(error.message))
   );
@@ -534,7 +537,7 @@ async function openEnneagram() {
 }
 
 function renderExpertPlaceholder() {
-  $("#expertView").innerHTML = `<div class="empty-panel"><span>⌁</span><b>授权内部参考</b><p>这里单独存放类型框架、出生信息先验和原始资料。默认画像不会加载或展示这些内容。</p></div>`;
+  $("#expertView").innerHTML = `<div class="empty-panel"><span>⌁</span><b>授权内部参考</b><p>这里单独存放辅助分类框架、背景先验和原始资料。默认画像不会加载或展示这些内容。</p></div>`;
 }
 
 async function loadExpertReference(shouldRender = true) {
@@ -561,30 +564,29 @@ function renderExpert() {
     ["tf", "事实权衡与价值感受"], ["jp", "计划结构与灵活调整"],
   ];
   $("#expertView").innerHTML = `
-    <div class="expert-warning"><b>仅限授权内部核验</b><p>${esc(data.usage_policy?.note || "参考模型不进入默认画像。")}</p><small>不可作为科学诊断、准确率或对外人物结论；没有独立对话证据时不得决定回答。</small></div>
+    <div class="expert-warning"><b>仅限授权内部核验</b><p>内部参考数据与原始来源不进入默认画像视图。</p><small>不可作为科学诊断、准确率或对外人物结论；没有独立对话证据时不得决定回答。</small></div>
     <div class="trait-section">
-      <div class="section-heading"><b>类型框架参考</b><small>非诊断 · 对外隐藏</small></div>
-      <div class="inspector-card"><div class="data-grid"><label>内部类型标签</label><span>${esc(mbti.type_label || "未形成")}</span>${mbtiDimensions.map(([key,label]) => `<label>${esc(label)}</label><span>${mbti[key] ? `${mbti[key].value < .45 ? "偏左侧" : (mbti[key].value > .55 ? "偏右侧" : "接近平衡")}` : "待观察"}</span>`).join("")}</div><small class="card-footnote">四字母标签只用于内部兼容，不在默认画像中展示。</small></div>
+      <div class="section-heading"><b>认知与决策倾向参考</b><small>辅助分类 · 对外隐藏</small></div>
+      <div class="inspector-card"><div class="data-grid"><label>辅助分类记录</label><span>${mbti.type_label ? "已保存" : "未形成"}</span>${mbtiDimensions.map(([key,label]) => `<label>${esc(label)}</label><span>${mbti[key] ? `${mbti[key].value < .45 ? "偏左侧" : (mbti[key].value > .55 ? "偏右侧" : "接近平衡")}` : "未形成"}</span>`).join("")}</div><small class="card-footnote">原始分类标签只用于内部兼容，不在界面和默认画像中展示。</small></div>
     </div>
     <div class="trait-section">
-      <div class="section-heading"><b>本人／专家提供的九型参考</b><small>明确来源 · 不自动分类</small><button class="button soft edit-enneagram">设置/更新</button></div>
+      <div class="section-heading"><b>本人／专家提供的动机模式参考</b><small>明确来源 · 不自动分类</small><button class="button soft edit-enneagram">设置/更新</button></div>
       ${enneagram.status === "confirmed" ? `<div class="inspector-card"><div class="data-grid">
         <label>内部参考编码</label><span>${esc(enneagram.identity?.code)}</span>
         <label>提供来源</label><span>${esc(({user_supplied:"用户声明",external_assessment:"授权测评",expert_confirmed:"专家确认"})[enneagram.source] || enneagram.source)}</span>
         <label>可能更重视</label><span>${esc(enneagram.layers?.motivation?.core_drive || "待核验")}</span>
         <label>沟通假设</label><span>${esc(enneagram.interaction_strategy?.communication?.response_pattern || "待核验")}</span>
-      </div><small class="card-footnote">上述内容是待验证假设，不直接进入聊天策略。</small></div>` : `<div class="inspector-card empty-evidence"><b>尚未提供类型参考</b><small>系统不会从生日、MBTI或普通对话自动推断。</small></div>`}
+      </div><small class="card-footnote">上述内容仅作辅助假设，不直接进入聊天策略。</small></div>` : `<div class="inspector-card empty-evidence"><b>尚未提供辅助参考</b><small>系统不会根据单一背景信息或普通对话自动推断类型。</small></div>`}
     </div>
     <div class="trait-section">
-      <div class="section-heading"><b>出生信息先验</b><small>内部待验证 · 对外隐藏</small></div>
-      ${digital.status === "derived" ? `<div class="inspector-card"><div class="data-grid"><label>内部规则代码</label><span>${esc(digital.code)}</span><label>规则版本</label><span>${esc(digital.algorithm_version)}</span><label>用途限制</label><span>只能提出校准问题</span></div></div>
-        ${Object.values(digital.domains || {}).map(domain => `<details class="source-sheet"><summary>${esc(domain.label)}的待验证摘要<small>内部来源</small></summary><div class="expert-reference-copy">${esc(domain.summary || "暂无")}</div></details>`).join("")}` : `<div class="inspector-card empty-evidence"><small>未启用出生信息先验，或只把生日作为事实保存。</small></div>`}
+      <div class="section-heading"><b>背景规则先验</b><small>内部辅助假设 · 对外隐藏</small></div>
+      ${digital.status === "derived" ? `<div class="inspector-card"><div class="data-grid"><label>内部规则记录</label><span>已保存</span><label>覆盖领域</label><span>${Object.keys(digital.domains || {}).length} 类</span><label>用途限制</label><span>只能提出校准问题</span></div><small class="card-footnote">原始代码与摘要保留在后台，不在界面展示。</small></div>` : `<div class="inspector-card empty-evidence"><small>未启用背景规则先验，或只把生日作为事实保存。</small></div>`}
     </div>
     <div class="trait-section">
-      <div class="section-heading"><b>出生信息规则结果</b><small>非实证结论</small></div>
-      <div class="inspector-card"><div class="data-grid"><label>生日事实</label><span>${esc(profile.identity?.birth_date || "未填写")}</span><label>原始规则文本</label><span>${esc(birth.bazi_text || "未生成")}</span><label>格局标签</label><span>${esc(birth.pattern_name || "未生成")}</span></div></div>
+      <div class="section-heading"><b>背景规则记录</b><small>仅作内部兼容</small></div>
+      <div class="inspector-card"><div class="data-grid"><label>生日事实</label><span>${esc(profile.identity?.birth_date || "未填写")}</span><label>规则记录状态</label><span>${birth.bazi_text ? "已保存" : "未生成"}</span><label>内部分类状态</label><span>${birth.pattern_name ? "已保存" : "未生成"}</span></div></div>
     </div>
-    ${source ? `<div class="trait-section"><div class="section-heading"><b>原始来源资料</b><small>未经对话验证 · ${esc(source.source_file)}</small></div><div class="source-document">${Object.entries(source.sheets || {}).map(([name,rows]) => sourceSheetMarkup(name,rows)).join("")}</div></div>` : ""}`;
+    ${source ? `<div class="trait-section"><div class="section-heading"><b>原始来源资料</b><small>已结构化入库 · 对外隐藏</small></div><div class="inspector-card"><div class="data-grid"><label>来源文件</label><span>${esc(source.source_file)}</span><label>数据表数量</label><span>${Object.keys(source.sheets || {}).length}</span><label>使用方式</label><span>用于初始化行为维度、场景模式与沟通样本</span></div></div></div>` : ""}`;
   const button = $(".edit-enneagram", $("#expertView"));
   if (button) button.onclick = () => openEnneagram().catch(error => toast(error.message));
 }

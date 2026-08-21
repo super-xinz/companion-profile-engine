@@ -160,6 +160,7 @@ TEMPLATE_PEOPLE = (
 )
 
 TEMPLATE_BY_BIRTH_DATE = {person.birth_date: person for person in TEMPLATE_PEOPLE}
+TEMPLATE_USER_IDS = frozenset(person.user_id for person in TEMPLATE_PEOPLE)
 
 
 def template_person_for_birth_date(birth_date: str | None) -> TemplatePerson | None:

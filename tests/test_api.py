@@ -11,6 +11,7 @@ from profile_engine.db import SessionLocal
 from profile_engine.model_catalog import MODEL_PROVIDERS
 from profile_engine.models import (AuditLog, CurrentState, IdempotencyRecord,
                                    ManualOverride, RuntimePreference, User)
+from profile_engine.template_people import TEMPLATE_BY_BIRTH_DATE
 
 
 HEADERS = {"X-API-Key": "local-development-key", "X-Tenant-ID": "test-tenant"}
@@ -168,8 +169,19 @@ def test_golden_profiles_are_complete():
             assert profile["mbti_dimensions"]["type_label"] == expected_type
             assert profile["core_traits"]["energy_mode"]["extroversion"]["value"] == expected_extroversion
             assert sum(len(x) for x in profile["core_traits"].values()) == 17
+            actual_traits = {
+                key: item["value"] for category in profile["core_traits"].values()
+                for key, item in category.items()
+            }
+            assert actual_traits == TEMPLATE_BY_BIRTH_DATE[birth_date].trait_values
             assert sum(len(x) for x in profile["behavior_style"].values()) == 18
             assert len(profile["language_style"]["typical_utterances"]) == 9
+            assert sum(len(x) for x in profile["source_behavior"].values()) == 18
+            assert len(profile["source_language"]["typical_utterances"]) == 9
+            assert all(
+                item["origin"] == "user_supplied_complete_profile"
+                for group in profile["source_behavior"].values() for item in group.values()
+            )
             assert len(profile["portrait"]) == 5
             assert profile["source_profile_document"]["birth_date"] == birth_date
             assert profile["identity"]["template_person_id"] == f"person-{birth_date}"
