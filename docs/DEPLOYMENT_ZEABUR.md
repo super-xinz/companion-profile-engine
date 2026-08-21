@@ -1,6 +1,6 @@
 # Profile Engine Zeabur 部署
 
-完整双服务步骤在 HIWM 仓库 `docs/DEPLOYMENT_ZEABUR.md`。本文件确保画像仓库也可独立交付。
+本文说明 `companion-profile-engine` 的独立部署、环境变量和验收流程。
 
 ## Service
 
@@ -27,11 +27,11 @@
 | `PROFILE_DATABASE_URL` | 是 | 是 | Zeabur PostgreSQL URL |
 | `PROFILE_TENANT_API_KEYS` | 是 | 是 | `{"demo-tenant":"<随机 Key>"}` |
 | `PROFILE_RULE_SOURCE_DIR=/app/rules` | 是 | 否 | 规则路径 |
-| `PROFILE_DEMO_TENANT_ID=demo-tenant` | 是 | 否 | 与 HIWM 一致 |
-| `PROFILE_DEMO_ACCESS_CODE` | 公开工作台时 | 是 | `/demo` 与 `/rules` 口令 |
+| `PROFILE_DEMO_TENANT_ID=demo-tenant` | 是 | 否 | 演示工作台使用的隔离租户 |
+| `PROFILE_DEMO_ACCESS_CODE` | 公开工作台时 | 是 | `/demo` 的独立口令 |
 | `PROFILE_DEMO_FEATURES_ENABLED` | 是 | 否 | 团队演示为 `true`；客户生产为 `false` |
-| `PROFILE_RULE_WORKBENCH_ENABLED=false` | 是 | 否 | 对外环境保持关闭；仅内部专家环境单独开启 |
-| `PROFILE_API_DOCS_ENABLED` | 是 | 否 | 团队验收可开启；客户生产默认关闭 |
+| `PROFILE_RULE_WORKBENCH_ENABLED=false` | 是 | 否 | 生产规则工作台始终关闭 |
+| `PROFILE_API_DOCS_ENABLED=false` | 是 | 否 | 生产 API 文档始终关闭 |
 | `PROFILE_ALLOW_PROFILE_RESET` | 是 | 否 | 仅测试环境允许 |
 | `PROFILE_RATE_LIMIT_PER_MINUTE` | 是 | 否 | 单副本租户级基础限流 |
 | `PROFILE_DEMO_RATE_LIMIT_PER_MINUTE=120` | 是 | 否 | 网站工作台每来源地址每分钟请求上限 |
@@ -41,7 +41,7 @@
 | `PROFILE_IDEMPOTENCY_TTL_HOURS=24` | 是 | 否 | 幂等响应缓存保留小时数，范围 1–168 |
 | `PROFILE_SEMANTIC_EXTRACTOR=model` | 是 | 否 | 外部模型语义抽取 |
 | `PROFILE_DEFAULT_MODEL_PROVIDER=deepseek` | 是 | 否 | 默认模型，可选 `deepseek` / `claude` / `gpt` / `glm` / `gemini` / `kimi` |
-| `PROFILE_OPENROUTER_API_KEY` | 是 | 是 | 所有模型共用的 OpenRouter 密钥 |
+| `PROFILE_OPENROUTER_API_KEY` | 启用 Demo 或外部语义抽取时 | 是 | 服务器端回答服务密钥；不得下发浏览器 |
 | `PROFILE_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1` | 是 | 否 | OpenRouter 兼容接口 |
 | `PROFILE_DEEPSEEK_MODEL=deepseek/deepseek-v3.2` | 是 | 否 | 固定 DeepSeek V3.2 |
 | `PROFILE_CLAUDE_MODEL=anthropic/claude-sonnet-5` | 是 | 否 | Claude Sonnet 5 固定模型 |
@@ -53,7 +53,7 @@
 
 ## 域名与服务访问
 
-优先只让 HIWM Service 通过同 Project 内部地址访问。本地区域若没有可用内部 HTTP 地址，可给 profile-engine 生成不公开宣传的 HTTPS 域名；核心读写仍强制 `X-API-Key`、`X-Tenant-ID`，写操作再强制 `Idempotency-Key`。无需为浏览器开放 CORS。
+优先只让已授权的 B 端服务通过同 Project 内部地址访问。本地区域若没有可用内部 HTTP 地址，可给 profile-engine 配置 HTTPS 域名；核心读写仍强制 `X-API-Key`、`X-Tenant-ID`，写操作再强制 `Idempotency-Key`。B 端密钥只保存在服务端，无需为普通浏览器开放核心 API 的 CORS。
 
 ## 验收
 
@@ -64,7 +64,7 @@
 5. PostgreSQL/Service 重启后画像仍存在。
 6. 日志只包含 request_id、path、状态和耗时，不含 Key/Header/完整画像。
 7. `GET /v1/capabilities` 返回服务 0.7.0、API v1、Schema、规则包与可选模型配置。
-8. 客户生产环境的 `/demo`、`/rules`、`/docs` 与 `:reset` 均不可访问。
+8. API-only 客户环境的 `/demo`、`/rules`、`/docs` 与 `:reset` 均不可访问；官方演示环境只按需开放受口令保护且使用隔离租户的 `/demo`，其余三项保持 404。
 
 ## 更新与回滚
 

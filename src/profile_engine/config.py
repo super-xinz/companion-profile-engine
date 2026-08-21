@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,7 +23,6 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///./data/profile_engine.db"
     api_key: str = "local-development-key"
-    tenant_id: str | None = None
     tenant_api_keys: dict[str, str] = Field(default_factory=dict)
     rule_source_dir: Path = Path("./rules")
     environment: str = "development"
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     demo_access_code: str | None = None
     demo_tenant_id: str = "demo-tenant"
     demo_features_enabled: bool | None = None
-    rule_workbench_enabled: bool | None = None
+    rule_workbench_enabled: bool = False
     api_docs_enabled: bool | None = None
     allow_profile_reset: bool | None = None
     rate_limit_per_minute: int = Field(default=120, ge=1, le=10_000)
@@ -88,15 +88,15 @@ class Settings(BaseSettings):
 
     @property
     def api_docs_active(self) -> bool:
+        if self.is_production:
+            return False
         if self.api_docs_enabled is not None:
             return self.api_docs_enabled
-        return not self.is_production
+        return True
 
     @property
     def rule_workbench_active(self) -> bool:
-        if self.rule_workbench_enabled is not None:
-            return self.rule_workbench_enabled
-        return not self.is_production
+        return self.rule_workbench_enabled and not self.is_production
 
     @property
     def profile_reset_active(self) -> bool:
@@ -121,15 +121,17 @@ class Settings(BaseSettings):
                 errors.append("启用 model 时必须明确设置 PROFILE_ALLOW_EXTERNAL_SEMANTIC_PROCESSING=true")
         if self.is_production and not self.openrouter_base_url.startswith("https://"):
             errors.append("生产环境 PROFILE_OPENROUTER_BASE_URL 必须使用 HTTPS")
+        if (
+            self.is_production
+            and urlparse(self.openrouter_base_url).hostname == "api.deepseek.com"
+            and "/" in self.deepseek_model
+        ):
+            errors.append("直连 DeepSeek 时 PROFILE_DEEPSEEK_MODEL 必须使用官方模型 ID")
         if self.is_production:
             if not self.database_url.startswith("postgresql+psycopg://"):
                 errors.append("生产环境必须使用 PostgreSQL，禁止使用容器内 SQLite")
-            single_tenant_configured = bool(self.tenant_id and len(self.api_key) >= 24)
-            if not self.tenant_api_keys and not single_tenant_configured:
-                errors.append(
-                    "生产环境必须配置 PROFILE_TENANT_API_KEYS，或同时配置 "
-                    "PROFILE_TENANT_ID 与至少 24 字符的 PROFILE_API_KEY"
-                )
+            if not self.tenant_api_keys:
+                errors.append("生产环境必须配置 PROFILE_TENANT_API_KEYS")
             weak_tenants = sorted(
                 tenant for tenant, key in self.tenant_api_keys.items()
                 if not tenant.strip() or len(key) < 24
@@ -137,7 +139,9 @@ class Settings(BaseSettings):
             if weak_tenants:
                 errors.append(f"以下租户 API Key 必须至少 24 个字符: {weak_tenants}")
             if self.demo_features_active and not self.demo_access_code:
-                errors.append("生产环境启用 Demo/规则工作台时必须设置 PROFILE_DEMO_ACCESS_CODE")
+                errors.append("生产环境启用 Demo 时必须设置 PROFILE_DEMO_ACCESS_CODE")
+            if self.demo_features_active and not self.openrouter_api_key:
+                errors.append("生产环境启用 Demo 时必须配置 PROFILE_OPENROUTER_API_KEY")
         if errors:
             raise RuntimeError("生产配置检查失败: " + "; ".join(errors))
 

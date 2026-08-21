@@ -17,13 +17,13 @@ const statusLabels = {
 const roleLabels = {admin: "管理员", reviewer: "审核人", expert: "画像专家", viewer: "只读成员"};
 const assetLabels = {
   cold_start: "冷启动规则", dialogue: "对话维护规则",
-  schema: "画像结构", enneagram: "深层互动策略"
+  schema: "画像结构", enneagram: "九型互动模型"
 };
 const assetDescriptions = {
   cold_start: "规定人物第一次创建时，如何从授权信息和原始规则库形成低置信度初始画像。",
   dialogue: "规定每轮对话如何理解证据、更新画像、处理冲突并调整回答策略。",
   schema: "规定一份完整画像必须包含哪些字段，以及每个字段的格式和边界。",
-  enneagram: "规定多层互动参数、关注重点、组合策略、场景适配和维护边界。"
+  enneagram: "规定9主型、18侧翼、6本能叠层、54种组合、场景策略和维护边界。"
 };
 const keyLabels = {
   objective: "目标", non_goals: "不用于哪些事情", input_contract: "输入要求",
@@ -54,14 +54,14 @@ const keyLabels = {
   chinese_name: "中文名", low_anchor: "低值锚点", high_anchor: "高值锚点",
   target_schema: "目标画像结构", status: "状态", rule_system_version: "规则版本",
   schema_version: "结构版本", dialogue: "对话", cold_start: "冷启动",
-  identity: "基本身份", birth_analysis: "初始画像线索", mbti_dimensions: "偏好倾向维度",
+  identity: "基本身份", birth_analysis: "出生信息分析", mbti_dimensions: "MBTI连续维度",
   behavior_style: "行为风格", language_style: "语言风格", portrait: "人物画像",
   interaction_preferences: "沟通偏好", current_state: "当前短期状态", memories: "长期记忆",
   groups: "分组", scenarios: "场景", fixed_contexts: "固定情境",
   required_paths: "必须包含的内容", meta_fields: "版本与审计信息",
-  core_types: "核心互动风格", wings: "辅助互动风格", instinct_stacks: "关注重点组合",
+  core_types: "九型9大主型", wings: "18种侧翼", instinct_stacks: "6种本能叠层",
   scene_adaptation: "场景适配层", layer_model: "六层人格模型", weights: "继承权重",
-  maintenance: "互动策略维护规则", boundaries: "模型边界", identity_schema: "互动风格结构"
+  maintenance: "九型维护规则", boundaries: "模型边界", identity_schema: "九型身份结构"
 };
 
 function toast(message) {
@@ -369,7 +369,7 @@ function renderValidation(report) {
   const checks = report.checks || {};
   node.className = `validation-report show ${report.valid ? "valid" : "invalid"}`;
   node.innerHTML = report.valid
-    ? `✓ 检查通过：${checks.trait_count ?? 17} 个画像维度、${checks.dialogue_mapping_count ?? 17} 个对话映射、互动策略覆盖完整、${checks.conflict_count ?? 0} 个冲突。`
+    ? `✓ 检查通过：${checks.trait_count ?? 17} 个画像维度、${checks.dialogue_mapping_count ?? 17} 个对话映射、${checks.enneagram_core_type_count ?? 9} 主型、${checks.enneagram_wing_count ?? 18} 侧翼、${checks.enneagram_resolved_combination_count ?? 54} 种九型组合、${checks.conflict_count ?? 0} 个冲突。`
     : `检查未通过：${(report.errors || []).map(esc).join("；")}`;
 }
 
