@@ -10,6 +10,8 @@ from profile_engine.demo import demo_auth
 from profile_engine.models import ChatMessage, Conversation, User
 from profile_engine.public_demo import (PUBLIC_TEMPLATE_IDENTITIES,
                                         public_conversation_id,
+                                        public_dynamic_summary,
+                                        public_preferences,
                                         sanitize_public_text)
 
 
@@ -78,6 +80,20 @@ def test_public_workspace_uses_aliases_and_whitelisted_dtos_only():
                 assert "不是对一个人的判断准确率" in item["confidence_explanation"]
             _assert_public_payload(boot.json())
 
+            summaries = {}
+            for identity in PUBLIC_TEMPLATE_IDENTITIES.values():
+                example = client.get(f"/demo/api/people/{identity.public_id}")
+                assert example.status_code == 200, example.text
+                payload = example.json()
+                summaries[identity.public_id] = payload["dynamic_summary"]
+                assert 3 <= len(payload["communication_preferences"]) <= 5
+                assert all(
+                    set(preference) == {"name", "value"}
+                    for preference in payload["communication_preferences"]
+                )
+                _assert_public_payload(payload)
+            assert len(set(summaries.values())) == 5
+
             alias = "profile-sky"
             detail = client.get(f"/demo/api/people/{alias}")
             assert detail.status_code == 200, detail.text
@@ -145,6 +161,37 @@ def test_public_workspace_uses_aliases_and_whitelisted_dtos_only():
             _assert_public_payload(messages.json())
     finally:
         app.dependency_overrides.pop(demo_auth, None)
+
+
+def test_public_template_defaults_are_overridden_by_valid_runtime_preferences():
+    profile = {
+        "identity": {"template_person_id": "person-1988-08-09"},
+        "runtime": {
+            "interaction_preferences": {
+                "response_length": "long",
+                "directness": 0.91,
+                "empathy_first": False,
+                "unknown_internal_option": "secret",
+            },
+            "current_state": {"engagement": {"value": 0.8}},
+            "memories": [],
+        },
+    }
+
+    preferences = public_preferences(profile)
+    values = {item["name"]: item["value"] for item in preferences}
+    assert len(preferences) == 5
+    assert values["回复篇幅"] == "充分"
+    assert values["表达直接度"] == 0.91
+    assert values["优先回应感受"] is False
+    assert values["追问频率"] == 0.45
+    assert values["幽默程度"] == 0.7
+    assert "已结合 1 项近期互动状态" in public_dynamic_summary(profile)
+    assert "已确认 3 项沟通偏好" in public_dynamic_summary(profile)
+    _assert_public_payload({
+        "summary": public_dynamic_summary(profile),
+        "preferences": preferences,
+    })
 
 
 def test_non_public_workspace_and_rule_routes_are_not_reachable():

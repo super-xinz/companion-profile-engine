@@ -18,23 +18,75 @@ class PublicTemplateIdentity:
     public_id: str
     display_name: str
     tagline: str
+    summary: str
+    default_preferences: tuple[tuple[str, str | float | bool], ...]
 
 
 PUBLIC_TEMPLATE_IDENTITIES: dict[str, PublicTemplateIdentity] = {
     "person-1988-08-09": PublicTemplateIdentity(
-        "profile-aurora", "互动样本 A", "重视灵感与自由表达",
+        "profile-aurora",
+        "互动样本 A",
+        "重视灵感与自由表达",
+        "容易被新鲜想法和自由表达调动，交流时适合先留出探索空间，再一起收拢到清晰、可执行的下一步。",
+        (
+            ("response_length", "medium"),
+            ("directness", 0.55),
+            ("empathy_first", True),
+            ("question_load", 0.45),
+            ("humor_level", 0.70),
+        ),
     ),
     "person-1989-10-15": PublicTemplateIdentity(
-        "profile-river", "互动样本 B", "善于探索不同可能",
+        "profile-river",
+        "互动样本 B",
+        "善于探索不同可能",
+        "习惯从多个角度快速展开思路，交流时适合用清楚的问题激发讨论，并在关键处帮助聚焦选择。",
+        (
+            ("response_length", "medium"),
+            ("directness", 0.78),
+            ("empathy_first", False),
+            ("question_load", 0.65),
+            ("humor_level", 0.65),
+        ),
     ),
     "person-1989-11-28": PublicTemplateIdentity(
-        "profile-harbor", "互动样本 C", "偏好有活力的互动节奏",
+        "profile-harbor",
+        "互动样本 C",
+        "偏好有活力的互动节奏",
+        "互动节奏较有活力，表达观点时通常直接而有推动感；回应时适合先接住核心意图，再留出有来有回的讨论空间。",
+        (
+            ("response_length", "short"),
+            ("directness", 0.88),
+            ("empathy_first", False),
+            ("question_load", 0.50),
+            ("humor_level", 0.75),
+        ),
     ),
     "person-1996-03-28": PublicTemplateIdentity(
-        "profile-forest", "互动样本 D", "重视关系中的体贴与回应",
+        "profile-forest",
+        "互动样本 D",
+        "重视关系中的体贴与回应",
+        "对关系氛围和他人的感受较敏锐，交流时适合先确认感受与需求，再用清楚、温和的方式推进事情。",
+        (
+            ("response_length", "medium"),
+            ("directness", 0.45),
+            ("empathy_first", True),
+            ("question_load", 0.35),
+            ("humor_level", 0.40),
+        ),
     ),
     "person-1998-12-06": PublicTemplateIdentity(
-        "profile-sky", "互动样本 E", "兼顾目标推进与情绪感受",
+        "profile-sky",
+        "互动样本 E",
+        "兼顾目标推进与情绪感受",
+        "倾向在目标推进和情绪感受之间寻找平衡，交流时适合说明重点与步骤，同时保留体贴、不过度施压的表达。",
+        (
+            ("response_length", "medium"),
+            ("directness", 0.65),
+            ("empathy_first", True),
+            ("question_load", 0.30),
+            ("humor_level", 0.25),
+        ),
     ),
 }
 
@@ -320,15 +372,30 @@ def _public_preference_value(key: str, value: Any) -> str | float | bool | None:
     return None
 
 
+def _template_identity_for_profile(profile: dict[str, Any]) -> PublicTemplateIdentity | None:
+    identity = profile.get("identity", {})
+    if not isinstance(identity, dict):
+        return None
+    for field in ("template_person_id", "user_id"):
+        internal_id = identity.get(field)
+        if isinstance(internal_id, str) and internal_id in PUBLIC_TEMPLATE_IDENTITIES:
+            return PUBLIC_TEMPLATE_IDENTITIES[internal_id]
+    return None
+
+
 def public_preferences(profile: dict[str, Any]) -> list[dict[str, Any]]:
     source = profile.get("runtime", {}).get("interaction_preferences", {})
-    if not isinstance(source, dict):
-        return []
+    template = _template_identity_for_profile(profile)
+    merged: dict[str, Any] = dict(template.default_preferences) if template else {}
+    if isinstance(source, dict):
+        for key, value in source.items():
+            if _public_preference_value(key, value) is not None:
+                merged[key] = value
     output = []
     for key, label in _PREFERENCE_LABELS.items():
-        if key not in source:
+        if key not in merged:
             continue
-        value = _public_preference_value(key, source[key])
+        value = _public_preference_value(key, merged[key])
         if value is not None:
             output.append({"name": label, "value": value})
     return output
@@ -341,17 +408,29 @@ def public_dynamic_summary(profile: dict[str, Any]) -> str:
     preferences = runtime.get("interaction_preferences", {}) if isinstance(runtime, dict) else {}
     state_count = len(states) if isinstance(states, dict) else 0
     memory_count = len(memories) if isinstance(memories, list) else 0
-    preference_count = len(preferences) if isinstance(preferences, dict) else 0
+    preference_count = (
+        sum(
+            _public_preference_value(key, value) is not None
+            for key, value in preferences.items()
+        )
+        if isinstance(preferences, dict)
+        else 0
+    )
+    template = _template_identity_for_profile(profile)
+    activity = []
+    if state_count:
+        activity.append(f"已结合 {state_count} 项近期互动状态")
+    if preference_count:
+        activity.append(f"已确认 {preference_count} 项沟通偏好")
+    if memory_count:
+        activity.append(f"已沉淀 {memory_count} 项持续对话信息")
+    if template:
+        if not activity:
+            return template.summary
+        return template.summary + " 当前" + "，".join(activity) + "。"
     if not (state_count or memory_count or preference_count):
         return "当前以基础互动特征为主，后续会根据持续对话逐步更新。"
-    pieces = []
-    if state_count:
-        pieces.append(f"已结合 {state_count} 项近期互动状态")
-    if preference_count:
-        pieces.append(f"已确认 {preference_count} 项沟通偏好")
-    if memory_count:
-        pieces.append(f"已沉淀 {memory_count} 项持续对话信息")
-    return "，".join(pieces) + "。"
+    return "，".join(activity) + "。"
 
 
 def public_profile_detail(profile: dict[str, Any]) -> dict[str, Any]:

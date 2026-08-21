@@ -1,6 +1,7 @@
 import json
 
 import httpx
+import pytest
 
 from profile_engine.config import Settings
 from profile_engine.extractor import ModelSemanticExtractor, SemanticExtractorError
@@ -134,6 +135,116 @@ def test_direct_deepseek_request_omits_router_only_reasoning_switch(monkeypatch)
     assert reply == "ok"
     assert resolved == "deepseek-chat"
     assert "reasoning" not in captured["json"]
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503, 504])
+def test_chat_completion_retries_once_for_transient_http_status(monkeypatch, status_code):
+    calls = []
+    delays = []
+
+    def fake_post(url, **_kwargs):
+        calls.append(url)
+        request = httpx.Request("POST", url)
+        if len(calls) == 1:
+            return httpx.Response(status_code, request=request)
+        return httpx.Response(200, request=request, json={
+            "model": "resolved-model",
+            "choices": [{"message": {"content": "ok"}}],
+        })
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr("profile_engine.model_gateway.sleep", delays.append)
+
+    reply, resolved = chat_completion(
+        endpoint(),
+        [{"role": "user", "content": "hello"}],
+        temperature=0.5,
+        max_tokens=20,
+    )
+
+    assert (reply, resolved) == ("ok", "resolved-model")
+    assert len(calls) == 2
+    assert delays == [0.25]
+
+
+@pytest.mark.parametrize("error_type", [httpx.ConnectError, httpx.ReadTimeout])
+def test_chat_completion_retries_once_for_connection_and_timeout_errors(monkeypatch, error_type):
+    calls = []
+    delays = []
+
+    def fake_post(url, **_kwargs):
+        calls.append(url)
+        request = httpx.Request("POST", url)
+        if len(calls) == 1:
+            raise error_type("temporary failure", request=request)
+        return httpx.Response(200, request=request, json={
+            "choices": [{"message": {"content": "ok"}}],
+        })
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr("profile_engine.model_gateway.sleep", delays.append)
+
+    assert chat_completion(
+        endpoint(),
+        [{"role": "user", "content": "hello"}],
+        temperature=0.5,
+        max_tokens=20,
+    ) == ("ok", endpoint().model)
+    assert len(calls) == 2
+    assert delays == [0.25]
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404])
+def test_chat_completion_does_not_retry_non_transient_http_status(monkeypatch, status_code):
+    calls = []
+    delays = []
+
+    def fake_post(url, **_kwargs):
+        calls.append(url)
+        return httpx.Response(status_code, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr("profile_engine.model_gateway.sleep", delays.append)
+
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        chat_completion(
+            endpoint(),
+            [{"role": "user", "content": "hello"}],
+            temperature=0.5,
+            max_tokens=20,
+        )
+
+    assert exc_info.value.response.status_code == status_code
+    assert len(calls) == 1
+    assert delays == []
+
+
+@pytest.mark.parametrize("failure_kind", ["connection", "status"])
+def test_chat_completion_stops_after_one_retry(monkeypatch, failure_kind):
+    calls = []
+    delays = []
+
+    def fake_post(url, **_kwargs):
+        calls.append(url)
+        request = httpx.Request("POST", url)
+        if failure_kind == "connection":
+            raise httpx.ConnectError("still unavailable", request=request)
+        return httpx.Response(503, request=request)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr("profile_engine.model_gateway.sleep", delays.append)
+    expected_error = httpx.ConnectError if failure_kind == "connection" else httpx.HTTPStatusError
+
+    with pytest.raises(expected_error):
+        chat_completion(
+            endpoint(),
+            [{"role": "user", "content": "hello"}],
+            temperature=0.5,
+            max_tokens=20,
+        )
+
+    assert len(calls) == 2
+    assert delays == [0.25]
 
 
 def test_claude_extractor_accepts_fenced_json_without_forcing_response_format(monkeypatch):
