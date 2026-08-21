@@ -142,7 +142,7 @@ small{display:block;color:var(--muted)}
 .profile-overview{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
 .profile-stat{padding:11px;background:white;border:1px solid var(--line);border-radius:12px}
 .profile-stat small{font-size:9px}.profile-stat b{font-size:17px}
-.mbti-row{display:grid;grid-template-columns:34px 1fr 33px;gap:8px;align-items:center;font-size:10px;margin:8px 0}
+.spectrum-row{display:grid;grid-template-columns:78px 1fr 33px;gap:8px;align-items:center;font-size:10px;margin:8px 0}
 .memory-item,.audit-item{padding:10px 0;border-bottom:1px solid var(--line);font-size:10px}
 .memory-item b,.audit-item b{display:block;font-size:11px}.memory-item p,.audit-item p{margin:3px 0;color:var(--muted)}
 .audit-item code{font-family:inherit;color:var(--pine)}

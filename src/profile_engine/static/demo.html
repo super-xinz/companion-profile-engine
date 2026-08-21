@@ -16,7 +16,6 @@
       </div>
       <nav class="workspace-switch" aria-label="工作台切换">
         <a class="active" href="/demo"><span>◉</span><span>对话与画像</span></a>
-        <a href="/rules"><span>⌘</span><span>规则管理</span></a>
       </nav>
       <div class="rail-section-title"><span>人物</span><button id="addPersonBtn" aria-label="新建人物">＋</button></div>
       <label class="search-box"><span>⌕</span><input id="peopleSearch" placeholder="搜索人物" autocomplete="off"></label>
@@ -88,9 +87,9 @@
       <p>这个人物会拥有独立的长期画像、证据、对话和版本历史。</p>
       <label class="form-field"><span>姓名</span><input name="display_name" required maxlength="128" placeholder="例如：林夏"></label>
       <label class="form-field"><span>生日（选填）</span><input name="birth_date" type="date"></label>
-      <label class="form-field"><span>九型主型（选填，仅填已确认结果）</span><select name="enneagram_core_type"><option value="">暂不设置</option><option value="1">1 完美型</option><option value="2">2 助人型</option><option value="3">3 成就型</option><option value="4">4 自我型</option><option value="5">5 观察型</option><option value="6">6 忠诚型</option><option value="7">7 探索型</option><option value="8">8 挑战型</option><option value="9">9 和平型</option></select></label>
-      <label class="form-field"><span>侧翼（选填）</span><select name="enneagram_wing"><option value="">无/待确认</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option></select></label>
-      <label class="form-field"><span>本能叠层</span><select name="enneagram_stack"><option value="SX/SO">SX/SO</option><option value="SX/SP">SX/SP</option><option value="SP/SX">SP/SX</option><option value="SP/SO">SP/SO</option><option value="SO/SX">SO/SX</option><option value="SO/SP">SO/SP</option></select></label>
+      <label class="form-field"><span>互动风格（选填，仅填已确认结果）</span><select name="enneagram_core_type"><option value="">暂不设置</option><option value="1">A · 稳健完善</option><option value="2">B · 温暖支持</option><option value="3">C · 目标驱动</option><option value="4">D · 深度表达</option><option value="5">E · 理性观察</option><option value="6">F · 审慎可靠</option><option value="7">G · 灵活探索</option><option value="8">H · 坚定推进</option><option value="9">I · 平和协调</option></select></label>
+      <label class="form-field"><span>辅助风格（选填）</span><select name="enneagram_wing"><option value="">无/待确认</option><option value="1">A</option><option value="2">B</option><option value="3">C</option><option value="4">D</option><option value="5">E</option><option value="6">F</option><option value="7">G</option><option value="8">H</option><option value="9">I</option></select></label>
+      <label class="form-field"><span>关注组合</span><select name="enneagram_stack"><option value="SX/SO">深度连接 · 群体协同</option><option value="SX/SP">深度连接 · 稳定保障</option><option value="SP/SX">稳定保障 · 深度连接</option><option value="SP/SO">稳定保障 · 群体协同</option><option value="SO/SX">群体协同 · 深度连接</option><option value="SO/SP">群体协同 · 稳定保障</option></select></label>
       <label class="form-field"><span>团队备注（选填）</span><textarea name="notes" rows="3" maxlength="1000" placeholder="仅团队可见"></textarea></label>
       <button class="button primary wide" type="submit">创建人物并初始化画像</button>
     </form>
@@ -113,14 +112,14 @@
     <form class="modal-card" id="enneagramForm">
       <button type="button" class="modal-close" data-close-modal="enneagramModal">×</button>
       <span class="eyebrow">明确输入 · 不自动分类</span>
-      <h2 id="enneagramModalTitle">维护九型互动画像</h2>
-      <p>仅填写用户明确声明、授权测评或专家确认的结果。保存后会生成新画像版本、派生策略和审计记录。</p>
-      <label class="form-field"><span>主型</span><select name="core_type" required><option value="1">1 完美型</option><option value="2">2 助人型</option><option value="3">3 成就型</option><option value="4">4 自我型</option><option value="5">5 观察型</option><option value="6">6 忠诚型</option><option value="7">7 探索型</option><option value="8">8 挑战型</option><option value="9">9 和平型</option></select></label>
-      <label class="form-field"><span>侧翼（选填）</span><select name="wing"><option value="">无/待确认</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option></select></label>
-      <label class="form-field"><span>本能叠层</span><select name="stack"><option value="SX/SO">SX/SO</option><option value="SX/SP">SX/SP</option><option value="SP/SX">SP/SX</option><option value="SP/SO">SP/SO</option><option value="SO/SX">SO/SX</option><option value="SO/SP">SO/SP</option></select></label>
+      <h2 id="enneagramModalTitle">维护互动风格</h2>
+      <p>仅填写用户明确声明、授权评估或专家确认的结果。保存后会更新互动建议和审计记录。</p>
+      <label class="form-field"><span>核心风格</span><select name="core_type" required><option value="1">A · 稳健完善</option><option value="2">B · 温暖支持</option><option value="3">C · 目标驱动</option><option value="4">D · 深度表达</option><option value="5">E · 理性观察</option><option value="6">F · 审慎可靠</option><option value="7">G · 灵活探索</option><option value="8">H · 坚定推进</option><option value="9">I · 平和协调</option></select></label>
+      <label class="form-field"><span>辅助风格（选填）</span><select name="wing"><option value="">无/待确认</option><option value="1">A</option><option value="2">B</option><option value="3">C</option><option value="4">D</option><option value="5">E</option><option value="6">F</option><option value="7">G</option><option value="8">H</option><option value="9">I</option></select></label>
+      <label class="form-field"><span>关注组合</span><select name="stack"><option value="SX/SO">深度连接 · 群体协同</option><option value="SX/SP">深度连接 · 稳定保障</option><option value="SP/SX">稳定保障 · 深度连接</option><option value="SP/SO">稳定保障 · 群体协同</option><option value="SO/SX">群体协同 · 深度连接</option><option value="SO/SP">群体协同 · 稳定保障</option></select></label>
       <label class="form-field"><span>来源</span><select name="source"><option value="expert_confirmed">专家确认</option><option value="external_assessment">外部测评</option><option value="user_supplied">用户声明</option></select></label>
       <label class="form-field"><span>维护原因</span><textarea name="reason" required rows="3" maxlength="1000" placeholder="例如：专家复核测评结果"></textarea></label>
-      <button class="button primary wide" type="submit">保存九型画像</button>
+      <button class="button primary wide" type="submit">保存互动风格</button>
     </form>
   </div>
 

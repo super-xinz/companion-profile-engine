@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f4f0e8">
+  <title>共鸣 · 规则管理工作台</title>
+  <link rel="stylesheet" href="/assets/workbench.css">
+</head>
+<body class="rules-page">
+  <div class="rules-shell">
+    <aside class="rules-rail">
+      <a class="brand" href="/rules"><span class="brand-mark">共</span><span><b>共鸣</b><small>画像引擎管理平台</small></span></a>
+      <nav class="workspace-switch" aria-label="工作台切换">
+        <a href="/demo"><span>◉</span><span>对话与画像</span></a>
+        <a class="active" href="/rules"><span>⌘</span><span>规则管理</span></a>
+      </nav>
+      <div class="rule-nav">
+        <button class="active" data-rule-view="assets"><span>▤</span>规则资产</button>
+        <button data-rule-view="test"><span>⌁</span>隔离测试</button>
+        <button data-rule-view="versions"><span>↺</span>版本与发布</button>
+        <button data-rule-view="members"><span>♧</span>团队与权限</button>
+      </div>
+      <div class="rail-footer">
+        <span class="avatar tiny" id="actorAvatar">管</span>
+        <span><b id="actorName">系统管理员</b><small id="actorRole">管理员</small></span>
+      </div>
+    </aside>
+
+    <main class="rules-main">
+      <header class="rules-topbar">
+        <div>
+          <div class="breadcrumbs">规则管理 / <span id="viewCrumb">规则资产</span></div>
+          <h1 id="rulesTitle">规则资产</h1>
+        </div>
+        <div class="release-summary"><span class="release-dot"></span><span><small>生产中</small><b id="productionVersion">加载中…</b></span></div>
+      </header>
+
+      <section class="rule-view active scroll-surface" id="assetsView">
+        <div class="view-intro">
+          <div><span class="eyebrow">完整文档编辑</span><h2>像读一份方案一样维护规则</h2><p>每类规则都以完整文档连续呈现。直接修改正文，保存时系统自动完成格式、引用和冲突检查。</p></div>
+          <button class="button primary" id="createDraftBtn">＋ 从生产版本创建草稿</button>
+        </div>
+        <div class="draft-banner" id="draftBanner"></div>
+        <div class="asset-layout">
+          <aside class="asset-nav">
+            <button class="active" data-asset="cold_start"><span class="asset-icon">冷</span><span><b>冷启动规则</b><small>初始先验与语义信号</small></span></button>
+            <button data-asset="dialogue"><span class="asset-icon">话</span><span><b>对话维护规则</b><small>证据、更新与回答策略</small></span></button>
+            <button data-asset="schema"><span class="asset-icon">构</span><span><b>画像结构</b><small>17 维度与字段定义</small></span></button>
+            <button data-asset="enneagram"><span class="asset-icon">九</span><span><b>九型互动模型</b><small>主型、侧翼、本能与场景</small></span></button>
+          </aside>
+          <div class="asset-editor">
+            <div class="editor-head">
+              <div><b id="assetTitle">冷启动规则</b><small id="assetMeta">读取生产规则</small></div>
+              <div class="editor-actions">
+                <div class="editor-mode-switch" aria-label="编辑方式">
+                  <button class="active" id="documentModeBtn" type="button">文档视图</button>
+                  <button id="sourceModeBtn" type="button">原始文件</button>
+                </div>
+                <button class="button soft" id="validateBtn">检查规则</button>
+                <button class="button primary" id="saveDraftBtn" disabled>保存草稿</button>
+              </div>
+            </div>
+            <div class="validation-report" id="validationReport"></div>
+            <div class="document-editor scroll-surface" id="documentEditor"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="rule-view scroll-surface" id="testView">
+        <div class="view-intro compact">
+          <div><span class="eyebrow">沙盒 · 不写入生产画像</span><h2>输入一段模拟对话，看规则如何工作</h2><p>同时对比生产规则与候选规则。测试前后会验证真实画像版本数没有变化。</p></div>
+        </div>
+        <div class="test-layout">
+          <form class="test-composer" id="ruleTestForm">
+            <label class="form-field"><span>测试规则版本</span><select id="testRevision"></select></label>
+            <label class="form-field"><span>模拟对话</span><textarea id="testText" rows="8" required>聚会后我通常要自己待一会儿才能恢复，而且以后回答可以短一点。</textarea></label>
+            <button class="button primary wide" type="submit">运行隔离测试</button>
+            <div class="isolation-note">✓ 测试使用临时状态，不保存消息、证据或画像版本</div>
+          </form>
+          <div class="test-results" id="testResults">
+            <div class="empty-state"><span>⌁</span><b>等待运行测试</b><p>结果会展示模型理解、命中规则、画像变化、回答策略和新旧差异。</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="rule-view scroll-surface" id="versionsView">
+        <div class="view-intro compact">
+          <div><span class="eyebrow">全生命周期</span><h2>草稿、审核、发布与回滚</h2><p>每个版本都保留修改人、修改时间、校验结果和变更摘要。</p></div>
+        </div>
+        <div class="version-toolbar">
+          <label>比较版本 <select id="compareLeft"></select></label><span>→</span><label><select id="compareRight"></select></label>
+          <button class="button soft" id="compareBtn">查看差异</button>
+        </div>
+        <div class="version-grid">
+          <div class="version-list" id="versionList"></div>
+          <div class="diff-panel" id="diffPanel"><div class="empty-state"><span>↔</span><b>选择两个版本比较</b><p>字段级差异会显示在这里。</p></div></div>
+        </div>
+      </section>
+
+      <section class="rule-view scroll-surface" id="membersView">
+        <div class="view-intro compact">
+          <div><span class="eyebrow">最小权限协作</span><h2>让每位专家只做被授权的事</h2><p>专家可编辑，审核人可确认，管理员负责正式发布和成员管理。</p></div>
+          <button class="button primary" id="addMemberBtn">＋ 添加团队成员</button>
+        </div>
+        <div class="member-table" id="memberTable"></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop hidden" id="memberModal" role="dialog" aria-modal="true">
+    <form class="modal-card" id="memberForm">
+      <button type="button" class="modal-close" data-close-modal="memberModal">×</button>
+      <span class="eyebrow">账号与权限</span><h2>添加团队成员</h2>
+      <label class="form-field"><span>姓名</span><input name="display_name" required></label>
+      <label class="form-field"><span>账号</span><input name="account" type="email" required placeholder="name@example.com"></label>
+      <label class="form-field"><span>角色</span><select name="role"><option value="expert">画像专家</option><option value="reviewer">审核人</option><option value="viewer">只读成员</option><option value="admin">管理员</option></select></label>
+      <button class="button primary wide" type="submit">保存成员</button>
+    </form>
+  </div>
+
+  <div class="access-gate" id="accessGate">
+    <form class="gate-card" id="accessForm">
+      <div class="gate-brand"><span class="brand-mark large">共</span><span><b>共鸣画像引擎</b><small>团队管理平台</small></span></div>
+      <span class="eyebrow">规则管理工作台</span>
+      <h1>让专业判断，变成可维护的产品能力。</h1>
+      <p>在线编辑、隔离测试、审核发布、版本对比与一键回滚。</p>
+      <label class="form-field"><span>访问密码</span><input id="gateCode" type="password" autocomplete="current-password" autofocus></label>
+      <div class="form-error" id="gateError"></div>
+      <button class="button primary wide" type="submit">进入规则工作台</button>
+      <small class="privacy-note">同一浏览器标签页内只需输入一次；在两个工作台之间切换无需重复验证。</small>
+    </form>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+  <script src="/assets/rules.js"></script>
+</body>
+</html>

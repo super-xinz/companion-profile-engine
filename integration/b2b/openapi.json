@@ -1,0 +1,1465 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Companion Profile Engine - B2B API",
+    "version": "0.2.0",
+    "description": "服务端到服务端的画像初始化、读取、消息摄取、更正与用户数据处置接口。"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles:init": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Initialize",
+        "operationId": "initialize_v1_profiles_init_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "X-Tenant-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileInitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileInitResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{user_id}": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Read Profile",
+        "operationId": "read_profile_v1_profiles__user_id__get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "X-Tenant-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileReadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{user_id}/messages:ingest": {
+      "post": {
+        "tags": [
+          "messages"
+        ],
+        "summary": "Ingest",
+        "operationId": "ingest_v1_profiles__user_id__messages_ingest_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "X-Tenant-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageIngestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageIngestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{user_id}/explain": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Explain",
+        "operationId": "explain_v1_profiles__user_id__explain_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "field",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Field"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "X-Tenant-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileExplainResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{user_id}:correct": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Correct",
+        "operationId": "correct_v1_profiles__user_id__correct_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "X-Tenant-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileCorrectionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{user_id}:set-enneagram": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Set Enneagram",
+        "operationId": "set_enneagram_v1_profiles__user_id__set_enneagram_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "X-Tenant-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnneagramRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetEnneagramResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{user_id}:forget": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Forget",
+        "operationId": "forget_v1_profiles__user_id__forget_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "X-Tenant-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgetResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/rule-packs/current": {
+      "get": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Rule Pack Current",
+        "operationId": "rule_pack_current_v1_rule_packs_current_get",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "X-Tenant-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RulePackCurrentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Consent": {
+        "properties": {
+          "profile": {
+            "type": "boolean",
+            "title": "Profile"
+          },
+          "sensitive_inference": {
+            "type": "boolean",
+            "title": "Sensitive Inference",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "profile"
+        ],
+        "title": "Consent"
+      },
+      "ConversationTurn": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role"
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "ConversationTurn"
+      },
+      "CorrectionRequest": {
+        "properties": {
+          "expected_profile_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Profile Version"
+          },
+          "target_path": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Target Path"
+          },
+          "value": {
+            "title": "Value"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected_profile_version",
+          "target_path",
+          "value",
+          "reason"
+        ],
+        "title": "CorrectionRequest"
+      },
+      "EnneagramIdentityInput": {
+        "properties": {
+          "core_type": {
+            "type": "integer",
+            "maximum": 9.0,
+            "minimum": 1.0,
+            "title": "Core Type"
+          },
+          "wing": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 9.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wing"
+          },
+          "primary_instinct": {
+            "type": "string",
+            "enum": [
+              "SP",
+              "SX",
+              "SO"
+            ],
+            "title": "Primary Instinct"
+          },
+          "secondary_instinct": {
+            "type": "string",
+            "enum": [
+              "SP",
+              "SX",
+              "SO"
+            ],
+            "title": "Secondary Instinct"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "user_supplied",
+              "external_assessment",
+              "expert_confirmed"
+            ],
+            "title": "Source",
+            "default": "user_supplied"
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "default": 0.8
+          }
+        },
+        "type": "object",
+        "required": [
+          "core_type",
+          "primary_instinct",
+          "secondary_instinct"
+        ],
+        "title": "EnneagramIdentityInput"
+      },
+      "ForgetRequest": {
+        "properties": {
+          "expected_profile_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Profile Version"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "memory",
+              "evidence",
+              "birth_inference",
+              "enneagram",
+              "all_profile"
+            ],
+            "title": "Scope"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected_profile_version",
+          "scope",
+          "reason"
+        ],
+        "title": "ForgetRequest"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "MessageContext": {
+        "properties": {
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "previous_turn_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Previous Turn Count",
+            "default": 0
+          },
+          "recent_turns": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationTurn"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "title": "Recent Turns"
+          }
+        },
+        "type": "object",
+        "title": "MessageContext"
+      },
+      "MessageIngestRequest": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Conversation Id"
+          },
+          "message_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Message Id"
+          },
+          "expected_profile_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Profile Version"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Occurred At"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "context": {
+            "$ref": "#/components/schemas/MessageContext"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conversation_id",
+          "message_id",
+          "expected_profile_version",
+          "occurred_at",
+          "text"
+        ],
+        "title": "MessageIngestRequest"
+      },
+      "ProfileInitRequest": {
+        "properties": {
+          "tenant_user_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Tenant User Id"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "birth_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birth Date"
+          },
+          "birth_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birth Time"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "enneagram": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnneagramIdentityInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "consent": {
+            "$ref": "#/components/schemas/Consent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_user_id",
+          "consent"
+        ],
+        "title": "ProfileInitRequest"
+      },
+      "SetEnneagramRequest": {
+        "properties": {
+          "expected_profile_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Profile Version"
+          },
+          "enneagram": {
+            "$ref": "#/components/schemas/EnneagramIdentityInput"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected_profile_version",
+          "enneagram",
+          "reason"
+        ],
+        "title": "SetEnneagramRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "RulePackSummary": {
+        "type": "object",
+        "required": [
+          "version",
+          "sha256",
+          "status"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "service",
+          "version",
+          "services"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded"
+            ]
+          },
+          "service": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "services": {
+            "type": "object",
+            "required": [
+              "application",
+              "database"
+            ],
+            "properties": {
+              "application": {
+                "type": "string"
+              },
+              "database": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "ProfileInitResponse": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "profile_version",
+          "rule_pack",
+          "profile",
+          "warnings"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "profile_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "rule_pack": {
+            "$ref": "#/components/schemas/RulePackSummary"
+          },
+          "profile": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ProfileReadResponse": {
+        "type": "object",
+        "required": [
+          "profile_version",
+          "profile",
+          "rule_pack_versions"
+        ],
+        "properties": {
+          "profile_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "profile": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "rule_pack_versions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ReplyHints": {
+        "type": "object",
+        "required": [
+          "max_sentences",
+          "answer_first",
+          "empathy_first",
+          "question_count",
+          "structure_level"
+        ],
+        "properties": {
+          "max_sentences": {
+            "type": "integer"
+          },
+          "answer_first": {
+            "type": "boolean"
+          },
+          "empathy_first": {
+            "type": "boolean"
+          },
+          "question_count": {
+            "type": "integer"
+          },
+          "structure_level": {
+            "type": "string"
+          },
+          "intent": {
+            "type": "string"
+          },
+          "tone": {
+            "type": "string"
+          },
+          "focus": {
+            "type": "string"
+          },
+          "avoid": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requires_fresh_information": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": true
+      },
+      "MessageIngestResponse": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "profile_version",
+          "rule_pack",
+          "semantic_frames",
+          "profile_patch",
+          "runtime_operations",
+          "reply_hints",
+          "no_profile_change"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "profile_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "rule_pack": {
+            "$ref": "#/components/schemas/RulePackSummary"
+          },
+          "semantic_extractor_version": {
+            "type": "string"
+          },
+          "semantic_frames": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "candidate_trait_signals": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "accepted_trait_signals": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "rejected_trait_signals": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "profile_patch": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "runtime_operations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "derived_patch": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "model_reply_guidance": {
+            "type": "object"
+          },
+          "reply_hints": {
+            "$ref": "#/components/schemas/ReplyHints"
+          },
+          "strategy_trace": {
+            "type": "object"
+          },
+          "no_profile_change": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProfileExplainResponse": {
+        "type": "object",
+        "required": [
+          "profile_version",
+          "supporting_evidence",
+          "counter_evidence",
+          "invalidated_evidence",
+          "version_history"
+        ],
+        "properties": {
+          "profile_version": {
+            "type": "integer"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supporting_evidence": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "counter_evidence": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "invalidated_evidence": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "version_history": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "ProfileCorrectionResponse": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "profile_version",
+          "rule_pack",
+          "corrected_field",
+          "before",
+          "requested_value",
+          "after"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "profile_version": {
+            "type": "integer"
+          },
+          "rule_pack": {
+            "$ref": "#/components/schemas/RulePackSummary"
+          },
+          "corrected_field": {
+            "type": "string"
+          },
+          "before": {},
+          "requested_value": {},
+          "after": {},
+          "derived_patch": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "SetEnneagramResponse": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "profile_version",
+          "before",
+          "enneagram_profile",
+          "rule_pack"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "profile_version": {
+            "type": "integer"
+          },
+          "before": {},
+          "enneagram_profile": {
+            "type": "object"
+          },
+          "rule_pack": {
+            "$ref": "#/components/schemas/RulePackSummary"
+          }
+        }
+      },
+      "ForgetResponse": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "profile_version",
+          "scope",
+          "affected_ids",
+          "rule_pack"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "profile_version": {
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "affected_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rule_pack": {
+            "$ref": "#/components/schemas/RulePackSummary"
+          }
+        }
+      },
+      "RulePackCurrentResponse": {
+        "type": "object",
+        "required": [
+          "version",
+          "sha256",
+          "status",
+          "validation_report",
+          "published_at"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "validation_report": {
+            "type": "object"
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8000",
+      "description": "本地；联调时替换为交付的环境地址"
+    }
+  ]
+}

@@ -12,6 +12,14 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, c => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
 }[c]));
+const presentationText = value => String(value ?? "")
+  .replace(/数字(?:密码|学)(?:\s*[0-9]{4})?/gi, "初始画像线索")
+  .replace(/MBTI/gi, "偏好倾向")
+  .replace(/九型(?:人格|互动画像|画像|互动)?/g, "互动风格")
+  .replace(/八字|命理/g, "出生信息线索")
+  .replace(/enneagram/gi, "interaction-style")
+  .replace(/numerology/gi, "initial-signal");
+const safeText = value => esc(presentationText(value));
 const traitLabels = {
   extroversion: "外向性", social_warmth: "社交温度", assertiveness: "果断性", impulsivity: "冲动性",
   openness: "开放性", creativity: "创造力", depth_of_thought: "思考深度", thinking_ratio: "理性决策",
@@ -31,6 +39,9 @@ const predicateLabels = {
   name: "姓名", event: "重要事件"
 };
 const roleLabels = { admin: "管理员", reviewer: "审核人", expert: "画像专家", viewer: "只读成员" };
+const sourceLabels = {
+  expert_confirmed: "专家确认", external_assessment: "授权评估", user_supplied: "用户声明"
+};
 
 function toast(message) {
   const node = $("#toast");
@@ -100,7 +111,7 @@ function renderPeople(filter = "") {
   $("#peopleList").innerHTML = items.length ? items.map(person => `
     <button class="person-item ${appState.person?.user_id === person.user_id ? "active" : ""}" data-person-id="${esc(person.user_id)}">
       <span class="avatar">${esc(initials(person.display_name))}</span>
-      <span><b>${esc(person.display_name)}</b><small>${esc(person.mbti || "XXXX")} · 画像 v${person.profile_version} · ${person.conversation_count} 段对话</small></span>
+      <span><b>${esc(person.display_name)}</b><small>画像 v${person.profile_version} · ${person.conversation_count} 段对话 · ${Math.round((person.overall_confidence || 0) * 100)}% 可信</small></span>
     </button>`).join("") : `<div class="empty-panel"><span>⌕</span><b>没有找到人物</b><p>换个名字搜索试试。</p></div>`;
   $$(".person-item").forEach(button => button.onclick = () => selectPerson(button.dataset.personId));
 }
@@ -127,7 +138,7 @@ async function selectPerson(userId) {
   appState.lastEngine = null;
   $("#personName").textContent = detail.person.display_name;
   $("#personAvatar").textContent = initials(detail.person.display_name);
-  $("#personMeta").textContent = `${detail.person.mbti} · 画像 v${detail.profile_version} · 置信度 ${Math.round(detail.person.overall_confidence * 100)}%`;
+  $("#personMeta").textContent = `画像 v${detail.profile_version} · 综合可信度 ${Math.round(detail.person.overall_confidence * 100)}%`;
   $("#inspectorSubtitle").textContent = `${detail.person.display_name} · 当前画像 v${detail.profile_version}`;
   $("#messageInput").disabled = false;
   $("#sendBtn").disabled = false;
@@ -281,7 +292,7 @@ async function reloadProfile() {
   appState.profile = detail.profile;
   appState.version = detail.profile_version;
   appState.audit = null;
-  $("#personMeta").textContent = `${detail.person.mbti} · 画像 v${detail.profile_version} · 置信度 ${Math.round(detail.person.overall_confidence * 100)}%`;
+  $("#personMeta").textContent = `画像 v${detail.profile_version} · 综合可信度 ${Math.round(detail.person.overall_confidence * 100)}%`;
   $("#inspectorSubtitle").textContent = `${detail.person.display_name} · 当前画像 v${detail.profile_version}`;
   renderProfile(detail.manual_overrides || []);
 }
@@ -317,7 +328,7 @@ function renderTurn(mode = "ready") {
     <div class="section-heading"><b>画像怎样变化</b><small>${patches.length + operations.length} 项</small></div>
     ${patches.map(patch => `
       <div class="inspector-card"><div class="inspector-card-title"><b>${esc(traitLabels[patch.field.split(".").pop()] || patch.field)}</b><span class="tag gold">${patch.after >= patch.before ? "+" : ""}${(patch.after - patch.before).toFixed(3)}</span></div>
-      <div class="mbti-row"><span>${Math.round(patch.before * 100)}</span><div class="trait-meter"><i style="width:${patch.after * 100}%"></i></div><b>${Math.round(patch.after * 100)}</b></div></div>`).join("")}
+      <div class="spectrum-row"><span>${Math.round(patch.before * 100)}</span><div class="trait-meter"><i style="width:${patch.after * 100}%"></i></div><b>${Math.round(patch.after * 100)}</b></div></div>`).join("")}
     ${operations.map(operation => `<div class="inspector-card"><div class="inspector-card-title"><b>${esc(operation.operation)}</b><span class="tag">${esc(operation.field || operation.key || "记忆")}</span></div><small>${esc(operation.value ?? operation.memory_id ?? "")}</small></div>`).join("")}
     ${!patches.length && !operations.length ? `<div class="inspector-card"><div class="inspector-card-title"><b>本轮保持画像不变</b><span class="tag gray">审慎模式</span></div><small>证据不足或字段已被人工锁定时，系统不会更新长期画像。</small></div>` : ""}
     <div class="section-heading"><b>回答策略如何变化</b><small>已被 Chatbot 消费</small></div>
@@ -330,22 +341,6 @@ function flattenTraits(profile) {
   return Object.entries(profile?.core_traits || {}).flatMap(([category, traits]) =>
     Object.entries(traits).map(([key, value]) => ({category, key, ...value}))
   );
-}
-
-function sourceSheetMarkup(name, rows) {
-  const visibleRows = (rows || []).filter(row => row.some(value => value !== null && value !== ""));
-  const width = Math.max(1, ...visibleRows.map(row => row.length));
-  return `<details class="source-sheet">
-    <summary>${esc(name)}<small>${visibleRows.length} 行原始内容</small></summary>
-    <div class="source-table-wrap"><table>${visibleRows.map(row => {
-      const values = [...row, ...Array(Math.max(0, width - row.length)).fill(null)];
-      const nonempty = values.filter(value => value !== null && value !== "");
-      if (nonempty.length === 1 && values[0] !== null) {
-        return `<tr class="source-heading"><th colspan="${width}">${esc(values[0])}</th></tr>`;
-      }
-      return `<tr>${values.map(value => `<td>${esc(value ?? "")}</td>`).join("")}</tr>`;
-    }).join("")}</table></div>
-  </details>`;
 }
 
 function renderProfile(overrides = []) {
@@ -361,7 +356,6 @@ function renderProfile(overrides = []) {
   const prefs = profile.runtime?.interaction_preferences || {};
   const states = profile.runtime?.current_state || {};
   const sourcePortrait = profile.source_portrait || {};
-  const sourceDocument = profile.source_profile_document;
   const enneagram = profile.enneagram_profile || {status: "unassigned", identity: {}, layers: {}, interaction_strategy: {}};
   const digitalCode = profile.digital_code_profile || {status: "unassigned", domains: {}};
   const tableView = profile.table_view || null;
@@ -373,65 +367,61 @@ function renderProfile(overrides = []) {
     <div class="profile-overview">
       <div class="profile-stat"><small>画像版本</small><b>v${profile.meta.profile_version}</b></div>
       <div class="profile-stat"><small>总体置信度</small><b>${Math.round(profile.meta.overall_confidence * 100)}%</b></div>
-      <div class="profile-stat"><small>MBTI 推导</small><b>${esc(profile.mbti_dimensions?.type_label || "XXXX")}</b></div>
+      <div class="profile-stat"><small>有效画像维度</small><b>${flattenTraits(profile).filter(item => (item.confidence || 0) > 0).length} / 17</b></div>
       <div class="profile-stat"><small>长期记忆</small><b>${memories.length}</b></div>
     </div>
     ${tableView ? `
     <div class="trait-section">
       <div class="section-heading"><b>统一画像视图</b><small>面向交付的一体化出口</small></div>
       <div class="inspector-card"><div class="data-grid">
-        <label>数字密码</label><span>${esc(tableView.digital_code_profile?.code || "未生成")}</span>
-        <label>九型人格</label><span>${esc(tableView.enneagram_profile?.identity?.code || "未确认")}</span>
+        <label>初始画像线索</label><span>${tableView.digital_code_profile ? "已形成" : "待完善"}</span>
+        <label>互动风格</label><span>${tableView.enneagram_profile?.status === "confirmed" ? "已确认" : "待确认"}</span>
         <label>核心维度</label><span>${Object.keys(tableView.core_traits || {}).length} 组</span>
         <label>行为画像</label><span>${Object.keys(tableView.behavior_style || {}).length} 组</span>
         <label>语言画像</label><span>${Object.keys(tableView.language_style || {}).length} 组</span>
         <label>人物画像</label><span>${Object.keys(tableView.portrait || {}).length} 项</span>
       </div></div>
-      <div class="inspector-card source-portrait"><b>整合摘要</b><p>${esc(tableView.portrait?.essence?.content || digitalCode.provenance?.source_file || "暂无摘要")}</p></div>
+      <div class="inspector-card source-portrait"><b>整合摘要</b><p>${safeText(tableView.portrait?.essence?.content || "暂无摘要")}</p></div>
     </div>` : ""}
     <div class="trait-section">
-      <div class="section-heading"><b>九型互动画像</b><small>明确输入后派生，不从普通对话自动判断</small><button class="button soft edit-enneagram">设置/更新</button></div>
+      <div class="section-heading"><b>深层互动策略</b><small>仅使用明确授权信息，不从单轮对话自动定性</small><button class="button soft edit-enneagram">设置/更新</button></div>
       ${enneagram.status === "confirmed" ? `
         <div class="inspector-card">
           <div class="data-grid">
-            <label>人格编码</label><span>${esc(enneagram.identity.code)}</span>
-            <label>主型</label><span>${esc(enneagram.identity.core_type_name)}</span>
-            <label>来源</label><span>${esc(enneagram.source)}</span>
-            <label>置信度</label><span>${Math.round((enneagram.confidence || 0) * 100)}%</span>
-            <label>核心驱动力</label><span>${esc(enneagram.layers?.motivation?.core_drive)}</span>
-            <label>注意力方向</label><span>${esc((enneagram.layers?.attention?.instinct_focus || []).join("、"))}</span>
-            <label>沟通策略</label><span>${esc(enneagram.interaction_strategy?.communication?.response_pattern)}</span>
-            <label>成长方向</label><span>${esc(enneagram.interaction_strategy?.companionship?.growth_direction)}</span>
+            <label>风格档案</label><span>已确认</span>
+            <label>信息来源</label><span>${esc(sourceLabels[enneagram.source] || "明确授权信息")}</span>
+            <label>参考强度</label><span>${Math.round((enneagram.confidence || 0) * 100)}%</span>
+            <label>核心驱动力</label><span>${safeText(enneagram.layers?.motivation?.core_drive)}</span>
+            <label>关注重点</label><span>${safeText((enneagram.layers?.attention?.instinct_focus || []).join("、"))}</span>
+            <label>沟通建议</label><span>${safeText(enneagram.interaction_strategy?.communication?.response_pattern)}</span>
+            <label>陪伴建议</label><span>${safeText(enneagram.interaction_strategy?.companionship?.growth_direction)}</span>
           </div>
-        </div>` : `<div class="inspector-card"><small>尚未设置九型人格。系统不会根据 MBTI、生日或单轮对话自动推断。</small></div>`}
+        </div>` : `<div class="inspector-card"><small>尚未设置深层互动策略。系统不会根据单一信息或单轮对话自动定性。</small></div>`}
     </div>
     <div class="trait-section">
-      <div class="section-heading"><b>数字密码画像</b><small>生日归约 · 低置信度冷启动</small></div>
+      <div class="section-heading"><b>初始画像线索</b><small>基于授权信息形成 · 仅作低权重参考</small></div>
       ${digitalCode.status === "derived" ? `
         <div class="inspector-card"><div class="data-grid">
-          <label>数字密码</label><span>${esc(digitalCode.code)}</span>
-          <label>模型置信度</label><span>${Math.round((digitalCode.confidence || 0) * 100)}%</span>
-          <label>算法版本</label><span>${esc(digitalCode.algorithm_version)}</span>
-          <label>来源</label><span>${esc(digitalCode.provenance?.source_file)}</span>
+          <label>形成状态</label><span>已形成</span>
+          <label>参考强度</label><span>${Math.round((digitalCode.confidence || 0) * 100)}%</span>
+          <label>内容范围</label><span>${Object.keys(digitalCode.domains || {}).length} 个方面</span>
+          <label>使用原则</label><span>低于真实对话与人工确认</span>
         </div></div>
         ${Object.values(digitalCode.domains || {}).map(domain => `
-          <div class="inspector-card source-portrait"><b>${esc(domain.label)}</b><p>${esc(domain.summary)}</p>
-            <details class="source-sheet"><summary>查看 ${domain.components?.length || 0} 个加权成分</summary>
-              <div class="source-table-wrap"><table><tr><th>特质</th><th>权重</th><th>内容</th></tr>${(domain.components || []).map(item => `<tr><td>${esc(item.label)}</td><td>${Math.round(item.weight * 100)}%</td><td>${esc(item.text)}</td></tr>`).join("")}</table></div>
+          <div class="inspector-card source-portrait"><b>${safeText(domain.label)}</b><p>${safeText(domain.summary)}</p>
+            <details class="source-sheet"><summary>查看 ${domain.components?.length || 0} 个参考项</summary>
+              <div class="source-table-wrap"><table><tr><th>观察项</th><th>参考权重</th><th>说明</th></tr>${(domain.components || []).map(item => `<tr><td>${safeText(item.label)}</td><td>${Math.round(item.weight * 100)}%</td><td>${safeText(item.text)}</td></tr>`).join("")}</table></div>
             </details>
           </div>`).join("")}` : `<div class="inspector-card"><small>未提供生日、未授权生日推断，或日期超出当前规则库范围。</small></div>`}
     </div>
-    ${sourceDocument ? `<div class="trait-section">
-      <div class="section-heading"><b>原始完整画像</b><small>${esc(sourceDocument.source_file)}</small></div>
-      ${Object.entries(sourcePortrait).map(([key, item]) => `<div class="inspector-card source-portrait"><b>${esc(portraitLabels[key] || key)}</b><p>${esc(item.content)}</p></div>`).join("")}
-      <div class="source-document">
-        ${Object.entries(sourceDocument.sheets || {}).map(([name, rows]) => sourceSheetMarkup(name, rows)).join("")}
-      </div>
+    ${Object.keys(sourcePortrait).length ? `<div class="trait-section">
+      <div class="section-heading"><b>整合人物摘要</b><small>仅展示可用结论，不展示内部来源与计算方法</small></div>
+      ${Object.entries(sourcePortrait).map(([key, item]) => `<div class="inspector-card source-portrait"><b>${esc(portraitLabels[key] || key)}</b><p>${safeText(item.content)}</p></div>`).join("")}
     </div>` : ""}
-    <div class="trait-section"><div class="section-heading"><b>MBTI 连续维度</b><small>由底层画像派生</small></div>
-      ${[["ei","I — E"],["sn","S — N"],["tf","F — T"],["jp","P — J"]].map(([key,label]) => {
+    <div class="trait-section"><div class="section-heading"><b>偏好倾向维度</b><small>由长期行为与授权信息综合形成</small></div>
+      ${[["ei","独处 — 互动"],["sn","具象 — 想象"],["tf","感受 — 分析"],["jp","灵活 — 规划"]].map(([key,label]) => {
         const item = profile.mbti_dimensions?.[key] || {value:.5, confidence:0};
-        return `<div class="mbti-row"><span>${label}</span><div class="trait-meter" title="置信度 ${Math.round(item.confidence*100)}%"><i style="width:${item.value*100}%"></i></div><b>${Math.round(item.value*100)}</b></div>`;
+        return `<div class="spectrum-row"><span>${label}</span><div class="trait-meter" title="可信度 ${Math.round(item.confidence*100)}%"><i style="width:${item.value*100}%"></i></div><b>${Math.round(item.value*100)}</b></div>`;
       }).join("")}
     </div>
     ${categories.map(([category, traits]) => `
@@ -495,13 +485,13 @@ function renderAuditPlaceholder() {
 function renderAudit() {
   const data = appState.audit;
   if (!data) return renderAuditPlaceholder();
-  $("#auditView").innerHTML = `
+    $("#auditView").innerHTML = `
     <div class="profile-overview"><div class="profile-stat"><small>支持证据</small><b>${data.supporting_evidence.length}</b></div><div class="profile-stat"><small>反向证据</small><b>${data.counter_evidence.length}</b></div><div class="profile-stat"><small>失效证据</small><b>${data.invalidated_evidence.length}</b></div><div class="profile-stat"><small>画像版本</small><b>${data.version_history.length}</b></div></div>
     <div class="trait-section"><div class="section-heading"><b>最近证据</b><small>含支持与反证</small></div>
-      ${[...data.supporting_evidence, ...data.counter_evidence].slice(-30).reverse().map(item => `<div class="inspector-card"><div class="inspector-card-title"><span><b>${esc(item.target_path.split(".").pop())}</b><small>${esc(item.rule_id)}</small></span><span class="tag ${item.direction < 0 ? "rose" : ""}">${item.direction < 0 ? "反证" : "支持"}</span></div><p style="font-size:10px;margin:0">${esc(item.reason)}</p><div class="evidence-quote">影响 ${Number(item.impact).toFixed(3)} · ${esc(item.source_type)}</div></div>`).join("") || `<div class="inspector-card"><small>暂无对话证据。</small></div>`}
+      ${[...data.supporting_evidence, ...data.counter_evidence].slice(-30).reverse().map(item => `<div class="inspector-card"><div class="inspector-card-title"><span><b>${safeText(traitLabels[item.target_path.split(".").pop()] || "画像观察项")}</b><small>规则校验记录</small></span><span class="tag ${item.direction < 0 ? "rose" : ""}">${item.direction < 0 ? "反证" : "支持"}</span></div><p style="font-size:10px;margin:0">${safeText(item.reason)}</p><div class="evidence-quote">影响 ${Number(item.impact).toFixed(3)} · ${item.source_type?.startsWith("manual") ? "人工确认" : "系统证据"}</div></div>`).join("") || `<div class="inspector-card"><small>暂无对话证据。</small></div>`}
     </div>
     <div class="trait-section"><div class="section-heading"><b>版本历史</b><small>不可变快照</small></div>${data.version_history.slice().reverse().map(item => `<div class="audit-item"><b>画像 v${item.version}</b><p>总体置信度 ${Math.round(item.overall_confidence * 100)}%</p><small>${esc(item.created_at.replace("T"," ").slice(0,19))}</small></div>`).join("")}</div>
-    <div class="trait-section"><div class="section-heading"><b>人工与系统审计</b><small>最近 ${data.audit_log.length} 条</small></div>${data.audit_log.map(item => `<div class="audit-item"><b>${esc(item.action)}</b><p>操作者：${esc(item.actor || "api")}</p><small>${esc(item.created_at.replace("T"," ").slice(0,19))}</small></div>`).join("")}</div>`;
+    <div class="trait-section"><div class="section-heading"><b>人工与系统审计</b><small>最近 ${data.audit_log.length} 条</small></div>${data.audit_log.map(item => `<div class="audit-item"><b>${safeText(item.action)}</b><p>操作者：${esc(item.actor || "api")}</p><small>${esc(item.created_at.replace("T"," ").slice(0,19))}</small></div>`).join("")}</div>`;
 }
 
 function switchInspector(name) {
@@ -621,7 +611,7 @@ $("#enneagramForm").onsubmit = async event => {
     });
     $("#enneagramModal").classList.add("hidden");
     await reloadProfile();
-    toast("九型互动画像已更新");
+    toast("深层互动策略已更新");
   } catch (error) { toast(error.message); }
 };
 

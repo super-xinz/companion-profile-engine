@@ -116,6 +116,20 @@ async def attach_request_id(request: Request, call_next):
     req_id = safe_request_id(request.headers.get("X-Request-ID"), request_id())
     request.state.request_id = req_id
     settings = get_settings()
+    if request.url.path == "/assets/demo.js" and not settings.demo_features_active:
+        response = _error(request, 404, "not_found", "页面不存在")
+        _apply_security_headers(response, request, req_id, settings)
+        return response
+    rule_workbench_path = (
+        request.url.path == "/rules"
+        or request.url.path.startswith("/demo/api/rules")
+        or request.url.path == "/assets/rules.js"
+    )
+    if rule_workbench_path:
+        if not settings.rule_workbench_active:
+            response = _error(request, 404, "not_found", "页面不存在")
+            _apply_security_headers(response, request, req_id, settings)
+            return response
     content_length = request.headers.get("Content-Length")
     if request.method in {"POST", "PUT", "PATCH"} and content_length is None:
         response = _error(request, 411, "length_required", "请求必须提供 Content-Length")
@@ -195,7 +209,11 @@ def auth_context(
     ),
 ) -> str:
     settings = get_settings()
-    expected = settings.tenant_api_keys.get(x_tenant_id, settings.api_key if settings.environment == "development" else "")
+    expected = settings.tenant_api_keys.get(x_tenant_id, "")
+    if not expected and settings.tenant_id == x_tenant_id:
+        expected = settings.api_key
+    if not expected and settings.environment == "development":
+        expected = settings.api_key
     authenticated = bool(x_api_key and expected and constant_time_equal(x_api_key, expected))
     if not authenticated:
         source = request.client.host if request.client else "unknown"
@@ -321,7 +339,8 @@ def demo_page() -> HTMLResponse:
 
 @app.get("/rules", response_class=HTMLResponse, include_in_schema=False)
 def rules_page() -> HTMLResponse:
-    if not get_settings().demo_features_active:
+    settings = get_settings()
+    if not settings.demo_features_active or not settings.rule_workbench_active:
         raise HTTPException(status_code=404, detail="规则工作台未启用")
     html = files("profile_engine").joinpath("static/rules.html").read_text(encoding="utf-8")
     return HTMLResponse(html)
